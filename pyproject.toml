@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "frognano"
+version = "0.0.0"
+description = "FrogNano"
+readme = "README.md"
+requires-python = ">=3.12"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+]
+
+[project.urls]
+Repository = "https://github.com/microsoft/FrogNano"
+Issues = "https://github.com/microsoft/FrogNano/issues"
+
+[project.optional-dependencies]
+dev = [
+    "black==26.5.1",
+    "isort==8.0.1",
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "pytest-xdist==3.8.0",
+]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+
+[tool.isort]
+profile = "black"
+
+[tool.pytest.ini_options]
+addopts = [
+    "--cov=frognano",
+    "--cov-report=term-missing",
+    "--cov-fail-under=85",
+]
