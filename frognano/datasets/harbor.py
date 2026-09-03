@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import DatasetSource
+from .source import DatasetSource
 
 _REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}")
@@ -30,7 +30,8 @@ def materialize_source(source: DatasetSource, cache_dir: Path) -> Path:
         raise ValueError("dataset revision must be a full SHA-1 commit")
     digest = hashlib.sha256(source.source_url.encode()).hexdigest()
     root = cache_dir.expanduser() / digest / revision
-    selected = root / source.subpath
+    root_dataset = source.subpath in {"", "."}
+    selected = root if root_dataset else root / source.subpath
     marker = root / ".frognano-source"
     if marker.is_file() and marker.read_text().strip() == revision:
         if selected.is_dir():
@@ -56,8 +57,9 @@ def materialize_source(source: DatasetSource, cache_dir: Path) -> Path:
             revision,
             env=env,
         )
-        _git(stage, "sparse-checkout", "init", "--cone", env=env)
-        _git(stage, "sparse-checkout", "set", "--cone", source.subpath, env=env)
+        if not root_dataset:
+            _git(stage, "sparse-checkout", "init", "--cone", env=env)
+            _git(stage, "sparse-checkout", "set", "--cone", source.subpath, env=env)
         _git(stage, "checkout", "--quiet", "--detach", "FETCH_HEAD", env=env)
         resolved = _git(stage, "rev-parse", "HEAD", env=env, capture=True)
         if resolved.lower() != revision:
@@ -138,8 +140,11 @@ def parse_harbor_task(
     environment = dict(manifest.get("environment") or {})
     agent = dict(manifest.get("agent") or {})
     verifier = dict(manifest.get("verifier") or {})
-    runtime = parse_dockerfile(task_dir / "environment" / "Dockerfile")
     configured_image = environment.get("docker_image") or environment.get("base_image")
+    runtime = parse_dockerfile(
+        task_dir / "environment" / "Dockerfile",
+        final_image=bool(configured_image),
+    )
     image = str(configured_image or runtime.image)
     effective_registry = image_registry or source.default_image_registry
     if effective_registry and _is_unqualified_image(image):
@@ -161,21 +166,30 @@ def parse_harbor_task(
                 for key, value in dict(environment.get("env") or {}).items()
             },
         },
-        "setup_commands": list(runtime.setup_commands),
+        "setup_commands": ([] if configured_image else list(runtime.setup_commands)),
         "tests_dir": str(tests_dir),
         "agent_timeout_sec": agent_timeout,
         "verifier_timeout_sec": verifier_timeout,
-        "agent_network_mode": str(
-            agent.get("network_mode") or source.agent_network_mode
+        "agent_network_mode": _network_mode(
+            agent,
+            environment,
+            source.agent_network_mode,
         ),
-        "verifier_network_mode": str(
-            verifier.get("network_mode") or source.verifier_network_mode
+        "verifier_network_mode": _network_mode(
+            verifier,
+            environment,
+            source.verifier_network_mode,
         ),
         "verifier_success_marker": source.verifier_success_marker,
         "resources": {
             "cpu": str(environment.get("cpus") or "0.5"),
-            "memory": str(environment.get("memory") or "8G"),
-            "storage": str(environment.get("storage") or "20G"),
+            "memory": _resource_quantity(environment, "memory", "memory_mb", "8G"),
+            "storage": _resource_quantity(
+                environment,
+                "storage",
+                "storage_mb",
+                "20G",
+            ),
         },
         "source": {
             "url": source.source_url,
@@ -186,7 +200,11 @@ def parse_harbor_task(
     }
 
 
-def parse_dockerfile(path: Path) -> DockerfileRuntime:
+def parse_dockerfile(
+    path: Path,
+    *,
+    final_image: bool = False,
+) -> DockerfileRuntime:
     if not path.is_file():
         raise ValueError(f"Harbor Dockerfile does not exist: {path}")
     image = ""
@@ -194,6 +212,12 @@ def parse_dockerfile(path: Path) -> DockerfileRuntime:
     environment: dict[str, str] = {}
     setup_commands: list[str] = []
     for instruction, value in _dockerfile_instructions(path.read_text()):
+        if final_image:
+            if instruction == "FROM" and not image:
+                image = value.split()[0]
+            elif instruction == "WORKDIR":
+                workdir = value.strip()
+            continue
         if instruction == "FROM":
             if image:
                 raise ValueError(f"Harbor Dockerfile must be single-stage: {path}")
@@ -206,7 +230,8 @@ def parse_dockerfile(path: Path) -> DockerfileRuntime:
                 raise ValueError(f"Dockerfile ENV must use KEY=VALUE: {path}")
             environment[key.strip()] = item.strip()
         elif instruction == "RUN":
-            setup_commands.append(value)
+            if not final_image:
+                setup_commands.append(value)
         elif instruction in {
             "ARG",
             "CMD",
@@ -263,3 +288,30 @@ def _expand_env(value: str) -> str:
         return os.environ.get(name, default or "")
 
     return _ENV_RE.sub(replace, value)
+
+
+def _network_mode(
+    role: dict[str, Any],
+    environment: dict[str, Any],
+    default: str,
+) -> str:
+    if role.get("network_mode"):
+        return str(role["network_mode"])
+    if environment.get("network_mode"):
+        return str(environment["network_mode"])
+    if environment.get("allow_internet") is not None:
+        return "public" if bool(environment["allow_internet"]) else "no-network"
+    return default
+
+
+def _resource_quantity(
+    environment: dict[str, Any],
+    value_key: str,
+    megabytes_key: str,
+    default: str,
+) -> str:
+    if environment.get(value_key) is not None:
+        return str(environment[value_key])
+    if environment.get(megabytes_key) is not None:
+        return f"{environment[megabytes_key]}Mi"
+    return default

@@ -1,33 +1,24 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-
-@dataclass(frozen=True)
-class DatasetSource:
-    name: str
-    display_name: str
-    source_url: str
-    revision: str
-    subpath: str
-    pod_prefix: str
-    agent_network_mode: str = "no-network"
-    verifier_network_mode: str = "no-network"
-    default_image_registry: str | None = None
-    verifier_success_marker: str | None = None
-
+from .harbor import load_harbor_dataset
+from .patch_eval import SOURCE as PATCH_EVAL
+from .patch_eval import load_patch_eval
+from .source import DatasetSource
+from .swebench_pro import SOURCE as SWEBENCH_PRO
+from .swebench_verified import SOURCE as SWEBENCH_VERIFIED
+from .terminal_bench_2 import SOURCE as TERMINAL_BENCH_2
 
 DatasetLoader = Callable[..., list[dict]]
 
-_DATASETS: dict[str, tuple[DatasetSource, DatasetLoader]] = {}
-
-
-def register_dataset(source: DatasetSource, loader: DatasetLoader) -> None:
-    if source.name in _DATASETS:
-        raise ValueError(f"dataset already registered: {source.name}")
-    _DATASETS[source.name] = (source, loader)
+_DATASETS: dict[str, tuple[DatasetSource, DatasetLoader]] = {
+    PATCH_EVAL.name: (PATCH_EVAL, load_patch_eval),
+    SWEBENCH_PRO.name: (SWEBENCH_PRO, load_harbor_dataset),
+    SWEBENCH_VERIFIED.name: (SWEBENCH_VERIFIED, load_harbor_dataset),
+    TERMINAL_BENCH_2.name: (TERMINAL_BENCH_2, load_harbor_dataset),
+}
 
 
 def get_dataset(name: str) -> tuple[DatasetSource, DatasetLoader]:
@@ -57,11 +48,8 @@ def load_dataset(
     )
 
 
-from . import swebench_verified as _swebench_verified  # noqa: E402,F401
-
 __all__ = [
     "DatasetSource",
     "get_dataset",
     "load_dataset",
-    "register_dataset",
 ]

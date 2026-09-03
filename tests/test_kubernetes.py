@@ -91,6 +91,47 @@ def test_compute_reward_accepts_completed_zero_reward() -> None:
     )
 
 
+def test_compute_patch_eval_reward_uses_fresh_image() -> None:
+    runtime = object.__new__(KubernetesTaskRuntime)
+    runtime.task = {
+        "repo_path": "/workspace/project",
+        "verifier_protocol": "patch_eval",
+        "verifier_timeout_sec": 600,
+    }
+    runtime._verifier_mode = False
+    recreated = []
+    copied = []
+    runtime.get_patch = lambda: "diff --git a/file b/file\n"
+    runtime.recreate = lambda: recreated.append(runtime._verifier_mode)
+    runtime.copy_to_container = lambda source, destination: copied.append(
+        (source.read_text(encoding="utf-8"), destination)
+    )
+    runtime.run = lambda command, **kwargs: ("validation passed", 0)
+
+    reward, output = runtime.compute_reward()
+
+    assert reward == 1.0
+    assert output == "validation passed"
+    assert recreated == [True]
+    assert copied == [("diff --git a/file b/file\n", "/workspace/fix.patch")]
+
+
+def test_detect_patch_eval_repo_path() -> None:
+    runtime = object.__new__(KubernetesTaskRuntime)
+    runtime.task = {
+        "repo_name": "Project",
+        "repo_path": "/workspace",
+    }
+
+    def run(command, **kwargs):
+        return "", 0 if "/workspace/project/.git" in command else 1
+
+    runtime.run = run
+    runtime._detect_repo_path()
+
+    assert runtime.task["repo_path"] == "/workspace/project"
+
+
 def test_copy_to_container_supports_wsclient_without_close_stdin(
     tmp_path,
 ) -> None:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from . import DatasetSource, register_dataset
-from .harbor import load_harbor_dataset
+from .source import DatasetSource
 
 SOURCE = DatasetSource(
     name="swebench_verified",
@@ -14,5 +13,3 @@ SOURCE = DatasetSource(
     verifier_network_mode="public",
     verifier_success_marker="SWEBench results ends here",
 )
-
-register_dataset(SOURCE, load_harbor_dataset)

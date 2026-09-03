@@ -8,6 +8,7 @@ import os
 import re
 import shlex
 import tarfile
+import tempfile
 import time
 import uuid
 from hashlib import sha256
@@ -35,6 +36,7 @@ class KubernetesTaskRuntime:
         self._pod_prefix = str(task.get("pod_prefix") or "frognano")
         self._run_id = run_id
         self._recovery_count = 0
+        self._verifier_mode = False
         self.pod_name = _pod_name(
             self._pod_prefix,
             str(task["instance_id"]),
@@ -137,6 +139,10 @@ class KubernetesTaskRuntime:
 
     def _initialize(self) -> None:
         self.run("mkdir -p /logs/verifier /logs/agent /tests /solution", workdir="/")
+        if self.task.get("detect_repo_path") and not self._verifier_mode:
+            self._detect_repo_path()
+        if self.task.get("hide_workspace_payload") and not self._verifier_mode:
+            self._hide_workspace_payload()
         for command in self.task.get("setup_commands") or ():
             output, exit_code = self.run(
                 str(command),
@@ -239,6 +245,8 @@ class KubernetesTaskRuntime:
         return output
 
     def compute_reward(self) -> tuple[float, str]:
+        if self.task.get("verifier_protocol") == "patch_eval":
+            return self._compute_patch_eval_reward()
         if self.task.get("verifier_network_mode") == "no-network":
             self._enable_network_isolation()
         self.run(
@@ -276,6 +284,71 @@ class KubernetesTaskRuntime:
         if reward_text.strip():
             return float(reward_text.strip()), output
         raise RuntimeError("Harbor verifier did not write a reward")
+
+    def _detect_repo_path(self) -> None:
+        repo_name = str(self.task.get("repo_name") or "")
+        candidates = [
+            f"/workspace/{repo_name}",
+            f"/workspace/{repo_name.lower()}",
+            "/workspace",
+        ]
+        for candidate in dict.fromkeys(candidates):
+            _, exit_code = self.run(
+                f"test -d {shlex.quote(candidate)}/.git",
+                timeout=30,
+                workdir="/",
+            )
+            if exit_code == 0:
+                self.task["repo_path"] = candidate
+                return
+        output, exit_code = self.run(
+            "find /workspace -mindepth 2 -maxdepth 3 -type d -name .git "
+            "2>/dev/null | head -n 2",
+            timeout=60,
+            workdir="/",
+        )
+        candidates = [
+            line.rsplit("/.git", 1)[0] for line in output.splitlines() if line.strip()
+        ]
+        if exit_code == 0 and len(candidates) == 1:
+            self.task["repo_path"] = candidates[0]
+            return
+        raise RuntimeError(
+            f"could not locate PatchEval Git repository for {repo_name!r}"
+        )
+
+    def _hide_workspace_payload(self) -> None:
+        workdir = str(self.task["repo_path"]).rstrip("/")
+        if workdir == "/workspace":
+            command = "rm -f /workspace/fix.patch"
+        elif workdir.startswith("/workspace/"):
+            top_name = workdir.removeprefix("/workspace/").split("/", 1)[0]
+            command = (
+                f"find /workspace -mindepth 1 -maxdepth 1 "
+                f"! -name {shlex.quote(top_name)} -exec rm -rf -- {{}} +"
+            )
+        else:
+            raise RuntimeError(f"PatchEval workdir is outside /workspace: {workdir}")
+        output, exit_code = self.run(command, timeout=300, workdir="/")
+        if exit_code != 0:
+            raise RuntimeError(
+                f"failed to hide PatchEval verifier payload: {output[-2000:]}"
+            )
+
+    def _compute_patch_eval_reward(self) -> tuple[float, str]:
+        patch = self.get_patch()
+        self._verifier_mode = True
+        self.recreate()
+        with tempfile.TemporaryDirectory(prefix="frognano-patch-eval-") as directory:
+            patch_path = Path(directory) / "fix.patch"
+            patch_path.write_text(patch, encoding="utf-8")
+            self.copy_to_container(patch_path, "/workspace/fix.patch")
+        output, exit_code = self.run(
+            "bash fix-run.sh",
+            timeout=int(self.task["verifier_timeout_sec"]),
+            workdir="/workspace",
+        )
+        return (1.0 if exit_code == 0 else 0.0), output
 
     def _enable_network_isolation(self) -> None:
         client = self._client_module

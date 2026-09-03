@@ -1,0 +1,35 @@
+dataset: terminal_bench_2
+output_dir: ${HOME}/frognano-eval-results/terminal-bench-2
+cache_dir: ${HOME}/.cache/frognano/harbor
+
+num_tasks: 1
+seed: 42
+seeds_per_task: 1
+max_workers: 1
+max_attempts: 2
+max_steps: 100
+max_context_tokens: 65536
+max_total_time_sec: 3000
+resume: true
+
+model:
+  name: Qwen/Qwen3.5-4B
+  base_url: http://127.0.0.1:8000/v1
+  api_key_env: OPENAI_API_KEY
+  temperature: 0.6
+  max_tokens_per_turn: null
+  timeout_sec: 7200
+  max_retries: 5
+  parallel_tool_calls: true
+
+kubernetes:
+  namespace: ${K8S_NAMESPACE:-default}
+  context: ${KUBE_CONTEXT:-}
+  kubeconfig: ${KUBE_CONFIG_PATH:-}
+  image_registry: ${K8S_IMAGE_REGISTRY:-}
+  service_account: ${K8S_SERVICE_ACCOUNT:-}
+  pull_secret: ${K8S_PULL_SECRET:-}
+  pod_start_timeout_sec: 900
+  keep_pods: false
+  labels:
+    app: frognano-eval
