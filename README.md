@@ -1,3 +1,168 @@
 # FrogNano
 
-FrogNano is under active development.
+FrogNano is a small, reproducible reference implementation for evaluating
+coding agents on software engineering tasks. It uses the Leaf tool-calling
+harness to evaluate agents on Harbor task datasets, with task execution
+isolated in Kubernetes sandboxes. It includes integrations for SWE-bench
+Verified, SWE-bench Pro, Terminal-Bench 2.0, and PatchEval Verified.
+This code release accompanies the FrogNano technical report.
+
+## What is included
+
+- A Leaf coding-agent harness with `Read`, `Write`, `Edit`, `Glob`, and `Bash`
+  tools.
+- Isolated Kubernetes environments for task execution and verification.
+- Integrations for SWE-bench Verified, SWE-bench Pro, Terminal-Bench 2.0, and
+  PatchEval Verified.
+- Support for configurable OpenAI-compatible model endpoints.
+- Reproducible, commit-pinned Harbor benchmark acquisition and configuration.
+- Parallel evaluation, retries, resume support, and structured result
+  artifacts.
+
+## Requirements
+
+- Python 3.12 or newer.
+- Git, used to retrieve benchmark task definitions.
+- A Kubernetes cluster with permission to manage task pods and network
+  policies. Minikube can be used for local evaluations.
+- Pull access to the benchmark container images.
+- An OpenAI-compatible model endpoint with structured tool-call support.
+
+## Install
+
+```bash
+python -m pip install git+https://github.com/microsoft/FrogNano.git
+```
+
+## Run a benchmark
+
+### Configure the model endpoint
+
+Each benchmark configuration specifies an OpenAI-compatible model endpoint.
+The endpoint's reasoning and tool-call parsers must match the model. For
+example, Qwen3.5 served with SGLang can use `--reasoning-parser qwen3` and
+`--tool-call-parser qwen3_coder`.
+
+### Select a tokenizer
+
+This step is optional. Context accounting first tries the configured model's
+Hugging Face tokenizer, then tiktoken, and finally a lightweight local
+estimate. To override the tokenizer, set a Hugging Face model or tiktoken model
+name:
+
+```bash
+export FROGNANO_TOKENIZER=Qwen/Qwen3.5-32B
+export FROGNANO_TOKENIZER=gpt-4o
+```
+
+An explicit tiktoken encoding name such as `o200k_base` is also accepted.
+
+### Run a smoke evaluation
+
+The bundled configurations evaluate one task with one worker by default:
+
+```bash
+export OPENAI_API_KEY=unused-for-local-endpoints
+export K8S_NAMESPACE=default
+
+frognano-eval run --config swebench-verified
+```
+
+### Choose a benchmark
+
+| Configuration | Dataset name |
+|---|---|
+| `swebench-verified` | `swebench_verified` |
+| `swebench-pro` | `swebench_pro` |
+| `terminal-bench-2` | `terminal_bench_2` |
+| `patch-eval` | `patch_eval` |
+
+To inspect a registered dataset source, run:
+
+```bash
+frognano-eval dataset swebench_verified
+```
+
+### Customize an evaluation
+
+Copy a YAML file from `frognano/configs/eval/` and pass its path to `--config`.
+Update the model endpoint, task selection, concurrency, or Kubernetes settings
+in the copied configuration.
+
+To run the full dataset with 50 concurrent workers, set:
+
+```yaml
+num_tasks: null
+max_workers: 50
+```
+
+Then run the copied configuration:
+
+```bash
+frognano-eval run --config swebench-verified-full.yaml
+```
+
+To evaluate specific tasks instead, set:
+
+```yaml
+task_ids:
+  - astropy__astropy-12907
+```
+
+Benchmark images resolve through Docker Hub by default. To use a registry
+mirror, set:
+
+```bash
+export K8S_IMAGE_REGISTRY=registry.example.com
+```
+
+## Outputs
+
+Each run writes:
+
+```text
+<output_dir>/
+  config.json
+  results.jsonl
+  summary.json
+  trajectories/
+    <instance_id>/
+      trajectory_seed-0.json
+      generated_seed-0.patch
+```
+
+With `resume: true`, completed `(instance_id, seed)` pairs in `results.jsonl`
+are skipped.
+
+## Adding datasets
+
+Add a module under `frognano/datasets/` that defines an immutable
+`DatasetSource`. A Harbor directory-backed dataset can reuse
+`load_harbor_dataset`:
+
+```python
+SOURCE = DatasetSource(
+    name="example",
+    display_name="Example",
+    source_url="https://github.com/example/harbor-datasets.git",
+    revision="<full-commit-sha>",
+    subpath="datasets/example",
+    pod_prefix="example",
+)
+```
+
+Import the source in `frognano/datasets/__init__.py` and add its loader to
+`_DATASETS`:
+
+```python
+from .example import SOURCE as EXAMPLE
+
+_DATASETS = {
+    # Existing datasets...
+    EXAMPLE.name: (EXAMPLE, load_harbor_dataset),
+}
+```
+
+This keeps dataset identity and policy separate from the harness, allowing new
+integrations to provide their own loaders or runtime requirements without
+changing the orchestration layer.
