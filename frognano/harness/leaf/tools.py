@@ -1,3 +1,5 @@
+"""Leaf system prompt and tool schemas."""
+
 from __future__ import annotations
 
 SYSTEM_PROMPT = (

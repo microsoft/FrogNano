@@ -9,15 +9,15 @@ import types
 from pathlib import Path
 from types import SimpleNamespace
 
-from frognano.leaf.agent import (
+from frognano.harness.leaf.agent import (
     LeafAgent,
     LeafConfig,
     OpenAIChatClient,
     _count_message_tokens,
 )
-from frognano.leaf.environment import LeafEnvironment
-from frognano.leaf.tool_runner import main, run_tool
-from frognano.leaf.tools import OPENAI_TOOLS
+from frognano.harness.leaf.environment import LeafEnvironment
+from frognano.harness.leaf.tool_runner import main, run_tool
+from frognano.harness.leaf.tools import OPENAI_TOOLS
 
 
 class FakeEnvironment:
@@ -250,11 +250,11 @@ def test_leaf_context_prefers_huggingface_tokenizer(monkeypatch) -> None:
     loaded = []
     monkeypatch.setenv("FROGNANO_TOKENIZER", "Qwen/Qwen3.5-32B")
     monkeypatch.setattr(
-        "frognano.leaf.agent._load_huggingface_tokenizer",
+        "frognano.harness.leaf.agent._load_huggingface_tokenizer",
         lambda tokenizer_id: loaded.append(tokenizer_id) or tokenizer,
     )
     monkeypatch.setattr(
-        "frognano.leaf.agent._load_tiktoken_encoding",
+        "frognano.harness.leaf.agent._load_tiktoken_encoding",
         lambda tokenizer_id: (_ for _ in ()).throw(AssertionError),
     )
 
@@ -268,11 +268,11 @@ def test_leaf_context_falls_through_to_tiktoken(monkeypatch) -> None:
     loaded = []
     monkeypatch.setenv("FROGNANO_TOKENIZER", "o200k_base")
     monkeypatch.setattr(
-        "frognano.leaf.agent._load_huggingface_tokenizer",
+        "frognano.harness.leaf.agent._load_huggingface_tokenizer",
         lambda tokenizer_id: loaded.append(tokenizer_id) or None,
     )
     monkeypatch.setattr(
-        "frognano.leaf.agent._load_tiktoken_encoding",
+        "frognano.harness.leaf.agent._load_tiktoken_encoding",
         lambda tokenizer_id: encoding,
     )
 
@@ -285,11 +285,11 @@ def test_leaf_context_falls_back_to_local_estimate(monkeypatch) -> None:
     serialized = json.dumps(messages, separators=(",", ":"), ensure_ascii=False)
     monkeypatch.delenv("FROGNANO_TOKENIZER", raising=False)
     monkeypatch.setattr(
-        "frognano.leaf.agent._load_huggingface_tokenizer",
+        "frognano.harness.leaf.agent._load_huggingface_tokenizer",
         lambda tokenizer_id: None,
     )
     monkeypatch.setattr(
-        "frognano.leaf.agent._load_tiktoken_encoding",
+        "frognano.harness.leaf.agent._load_tiktoken_encoding",
         lambda tokenizer_id: None,
     )
 
@@ -443,7 +443,7 @@ def test_tool_runner_main_reads_standard_input(tmp_path, monkeypatch, capsys) ->
 
 
 def test_tool_runner_uses_python_36_compatible_annotations() -> None:
-    path = Path("frognano/leaf/tool_runner.py")
+    path = Path("frognano/harness/leaf/tool_runner.py")
     tree = ast.parse(path.read_text(encoding="utf-8"), feature_version=(3, 6))
     unsupported = [
         node

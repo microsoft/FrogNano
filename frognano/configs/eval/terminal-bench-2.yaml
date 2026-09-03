@@ -1,5 +1,6 @@
-dataset: swebench_pro
-output_dir: ${HOME}/frognano-eval-results/swebench-pro
+# Bundled Terminal-Bench 2.0 configuration.
+dataset: terminal_bench_2
+output_dir: ${HOME}/frognano-eval-results/terminal-bench-2
 cache_dir: ${HOME}/.cache/frognano/harbor
 
 num_tasks: 1

@@ -1,4 +1,4 @@
-"""Stdlib-only executor copied into each Harbor task pod."""
+"""Stdlib-only Leaf executor copied into each task pod."""
 
 import glob as globlib
 import json

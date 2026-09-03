@@ -1,3 +1,5 @@
+"""Leaf task environment backed by a FrogNano runtime."""
+
 from __future__ import annotations
 
 import base64
@@ -6,7 +8,7 @@ import shlex
 from pathlib import Path
 from typing import Any
 
-from ..kubernetes import KubernetesTaskRuntime
+from frognano.runtimes.kubernetes import KubernetesTaskRuntime
 
 _RUNNER_PATH = "/tmp/frognano_leaf_tool_runner.py"
 _MUTATING_TOOLS = frozenset({"Write", "Edit", "Bash"})

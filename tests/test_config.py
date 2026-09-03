@@ -52,6 +52,13 @@ kubernetes:
     assert config.kubernetes.image_registry is None
 
 
+def test_load_config_reads_packaged_config_by_name() -> None:
+    config = load_config("swebench-verified")
+
+    assert config.dataset == "swebench_verified"
+    assert config.model.name == "Qwen/Qwen3.5-4B"
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [

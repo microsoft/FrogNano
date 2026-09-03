@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from .harbor import materialize_source
-from .source import DatasetSource
+from frognano.datasets.harbor import materialize_source
+from frognano.datasets.source import DatasetSource
 
 SOURCE = DatasetSource(
     name="patch_eval",

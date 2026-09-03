@@ -3,13 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Callable
 
-from .harbor import load_harbor_dataset
-from .patch_eval import SOURCE as PATCH_EVAL
-from .patch_eval import load_patch_eval
-from .source import DatasetSource
-from .swebench_pro import SOURCE as SWEBENCH_PRO
-from .swebench_verified import SOURCE as SWEBENCH_VERIFIED
-from .terminal_bench_2 import SOURCE as TERMINAL_BENCH_2
+from frognano.datasets.harbor import load_harbor_dataset
+from frognano.datasets.patch_eval import SOURCE as PATCH_EVAL
+from frognano.datasets.patch_eval import load_patch_eval
+from frognano.datasets.source import DatasetSource
+from frognano.datasets.swebench_pro import SOURCE as SWEBENCH_PRO
+from frognano.datasets.swebench_verified import SOURCE as SWEBENCH_VERIFIED
+from frognano.datasets.terminal_bench_2 import SOURCE as TERMINAL_BENCH_2
 
 DatasetLoader = Callable[..., list[dict]]
 

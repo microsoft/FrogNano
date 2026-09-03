@@ -5,9 +5,9 @@ import json
 import logging
 from collections.abc import Sequence
 
-from .config import load_config
-from .datasets import get_dataset
-from .runner import run_evaluation
+from frognano.config import load_config
+from frognano.datasets import get_dataset
+from frognano.runner import run_evaluation
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -17,7 +17,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     run = subparsers.add_parser("run", help="Run an evaluation config")
-    run.add_argument("--config", required=True, help="Path to YAML config")
+    run.add_argument(
+        "--config",
+        required=True,
+        help="Path to a YAML config or bundled config name",
+    )
     inspect = subparsers.add_parser("dataset", help="Show a registered dataset source")
     inspect.add_argument("name")
     parser.add_argument(

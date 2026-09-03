@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -158,8 +159,20 @@ def load_config(path: str | Path) -> EvalConfig:
         import yaml
     except ImportError as exc:
         raise RuntimeError("PyYAML is required; install FrogNano") from exc
-    with Path(path).open(encoding="utf-8") as stream:
-        raw = yaml.safe_load(stream)
+    raw = yaml.safe_load(_read_config(path))
     if not isinstance(raw, dict):
         raise ValueError("evaluation config must be a YAML object")
     return EvalConfig.from_dict(_expand(raw))
+
+
+def _read_config(path: str | Path) -> str:
+    candidate = Path(path)
+    if candidate.is_file():
+        return candidate.read_text(encoding="utf-8")
+    name = str(path)
+    if candidate.name == name:
+        filename = name if name.endswith(".yaml") else f"{name}.yaml"
+        packaged = files("frognano.configs.eval").joinpath(filename)
+        if packaged.is_file():
+            return packaged.read_text(encoding="utf-8")
+    raise FileNotFoundError(f"evaluation config does not exist: {path}")

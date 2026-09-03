@@ -1,8 +1,8 @@
-dataset: swebench_verified
-output_dir: ${HOME}/frognano-eval-results/swebench-verified
+# Bundled PatchEval configuration.
+dataset: patch_eval
+output_dir: ${HOME}/frognano-eval-results/patch-eval
 cache_dir: ${HOME}/.cache/frognano/harbor
 
-# Start with one task before increasing concurrency or removing num_tasks.
 num_tasks: 1
 seed: 42
 seeds_per_task: 1
@@ -22,19 +22,11 @@ model:
   timeout_sec: 7200
   max_retries: 5
   parallel_tool_calls: true
-  extra_body:
-    chat_template_kwargs:
-      enable_thinking: true
-    top_p: 0.95
-    top_k: 20
-    min_p: 0.0
-    repetition_penalty: 1.0
 
 kubernetes:
   namespace: ${K8S_NAMESPACE:-default}
   context: ${KUBE_CONTEXT:-}
   kubeconfig: ${KUBE_CONFIG_PATH:-}
-  # Empty uses the image's Docker Hub reference.
   image_registry: ${K8S_IMAGE_REGISTRY:-}
   service_account: ${K8S_SERVICE_ACCOUNT:-}
   pull_secret: ${K8S_PULL_SECRET:-}

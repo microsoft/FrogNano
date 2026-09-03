@@ -39,6 +39,9 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["frognano*"]
 
+[tool.setuptools.package-data]
+"frognano.configs.eval" = ["*.yaml"]
+
 [tool.black]
 line-length = 88
 target-version = ["py312"]
@@ -55,5 +58,5 @@ addopts = [
 
 [tool.coverage.run]
 omit = [
-    "frognano/kubernetes.py",
+    "frognano/runtimes/kubernetes.py",
 ]

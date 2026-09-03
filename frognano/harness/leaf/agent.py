@@ -1,3 +1,5 @@
+"""Leaf model and tool orchestration."""
+
 from __future__ import annotations
 
 import json
@@ -12,8 +14,8 @@ from typing import Any, Callable, Protocol
 
 import tiktoken
 
-from .environment import LeafEnvironment
-from .tools import OPENAI_TOOLS, SYSTEM_PROMPT
+from frognano.harness.leaf.environment import LeafEnvironment
+from frognano.harness.leaf.tools import OPENAI_TOOLS, SYSTEM_PROMPT
 
 _LENGTH_FINISH_REASONS = frozenset({"length", "max_tokens", "max_new_tokens"})
 logger = logging.getLogger(__name__)

@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from frognano.kubernetes import (
+from frognano.runtimes.kubernetes import (
     KubernetesTaskRuntime,
     _pod_name,
     _run_label,

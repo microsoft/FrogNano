@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .source import DatasetSource
+from frognano.datasets.source import DatasetSource
 
 SOURCE = DatasetSource(
     name="terminal_bench_2",

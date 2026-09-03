@@ -13,11 +13,11 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from .config import EvalConfig
-from .datasets import load_dataset
-from .kubernetes import KubernetesTaskRuntime
-from .leaf import LeafAgent, LeafConfig
-from .leaf.environment import LeafEnvironment
+from frognano.config import EvalConfig
+from frognano.datasets import load_dataset
+from frognano.harness.leaf import LeafAgent, LeafConfig
+from frognano.harness.leaf.environment import LeafEnvironment
+from frognano.runtimes import KubernetesTaskRuntime
 
 logger = logging.getLogger(__name__)
 

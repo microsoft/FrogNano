@@ -1,3 +1,5 @@
+"""Kubernetes task execution runtime."""
+
 from __future__ import annotations
 
 import base64
@@ -15,7 +17,7 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
-from .config import KubernetesConfig
+from frognano.config import KubernetesConfig
 
 _SAFE_NAME_RE = re.compile(r"[^a-z0-9-]+")
 

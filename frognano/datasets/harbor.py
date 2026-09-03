@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .source import DatasetSource
+from frognano.datasets.source import DatasetSource
 
 _REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}")
