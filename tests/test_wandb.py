@@ -113,18 +113,38 @@ def test_wandb_tracker_logs_progress_and_resumes_run(tmp_path, monkeypatch) -> N
     ]
     assert progress["overall/completed_percent"] == 25.0
     assert progress["overall/error_percent"] == 25.0
+    assert progress["overall/execution_task_resolve_percent"] == 50.0
+    assert progress["overall/execution_task_unresolve_percent"] == 0.0
+    assert progress["overall/execution_task_error_percent"] == 50.0
+    assert progress["overall/valid_task_resolve_percent"] == 100.0
+    assert progress["overall/valid_task_unresolve_percent"] == 0.0
     assert progress["overall/resolve_rate_percent"] == 100.0
     assert progress["seed-0/resolve_rate_percent"] == 100.0
     assert progress["seed-1/error_percent"] == 50.0
     assert set(progress) == {
         "overall/completed_percent",
         "overall/error_percent",
+        "overall/execution_task_resolve_percent",
+        "overall/execution_task_unresolve_percent",
+        "overall/execution_task_error_percent",
+        "overall/valid_task_resolve_percent",
+        "overall/valid_task_unresolve_percent",
         "overall/resolve_rate_percent",
         "overall/unresolve_rate_percent",
         "seed-0/error_percent",
+        "seed-0/execution_task_resolve_percent",
+        "seed-0/execution_task_unresolve_percent",
+        "seed-0/execution_task_error_percent",
+        "seed-0/valid_task_resolve_percent",
+        "seed-0/valid_task_unresolve_percent",
         "seed-0/resolve_rate_percent",
         "seed-0/unresolve_rate_percent",
         "seed-1/error_percent",
+        "seed-1/execution_task_resolve_percent",
+        "seed-1/execution_task_unresolve_percent",
+        "seed-1/execution_task_error_percent",
+        "seed-1/valid_task_resolve_percent",
+        "seed-1/valid_task_unresolve_percent",
         "seed-1/resolve_rate_percent",
         "seed-1/unresolve_rate_percent",
     }

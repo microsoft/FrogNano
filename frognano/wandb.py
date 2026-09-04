@@ -90,6 +90,7 @@ class WandbTracker:
         resolved = sum(float(result.get("reward") or 0) >= 1 for result in completed)
         recorded = len(self.results)
         failed = recorded - len(completed)
+        unresolved = len(completed) - resolved
         metrics: dict[str, int | float] = {
             "overall/completed_percent": self._percent(
                 len(completed),
@@ -101,7 +102,27 @@ class WandbTracker:
                 len(completed),
             ),
             "overall/unresolve_rate_percent": self._percent(
-                len(completed) - resolved,
+                unresolved,
+                len(completed),
+            ),
+            "overall/execution_task_resolve_percent": self._percent(
+                resolved,
+                recorded,
+            ),
+            "overall/execution_task_unresolve_percent": self._percent(
+                unresolved,
+                recorded,
+            ),
+            "overall/execution_task_error_percent": self._percent(
+                failed,
+                recorded,
+            ),
+            "overall/valid_task_resolve_percent": self._percent(
+                resolved,
+                len(completed),
+            ),
+            "overall/valid_task_unresolve_percent": self._percent(
+                unresolved,
                 len(completed),
             ),
         }
@@ -118,16 +139,38 @@ class WandbTracker:
                 float(result.get("reward") or 0) >= 1 for result in seed_completed
             )
             prefix = f"seed-{seed}"
+            seed_failed = len(seed_results) - len(seed_completed)
+            seed_unresolved = len(seed_completed) - seed_resolved
             metrics[f"{prefix}/error_percent"] = self._percent(
-                len(seed_results) - len(seed_completed),
+                seed_failed,
                 self.jobs_total // self.seeds_per_task,
+            )
+            metrics[f"{prefix}/execution_task_resolve_percent"] = self._percent(
+                seed_resolved,
+                len(seed_results),
+            )
+            metrics[f"{prefix}/execution_task_unresolve_percent"] = self._percent(
+                seed_unresolved,
+                len(seed_results),
+            )
+            metrics[f"{prefix}/execution_task_error_percent"] = self._percent(
+                seed_failed,
+                len(seed_results),
+            )
+            metrics[f"{prefix}/valid_task_resolve_percent"] = self._percent(
+                seed_resolved,
+                len(seed_completed),
+            )
+            metrics[f"{prefix}/valid_task_unresolve_percent"] = self._percent(
+                seed_unresolved,
+                len(seed_completed),
             )
             metrics[f"{prefix}/resolve_rate_percent"] = self._percent(
                 seed_resolved,
                 len(seed_completed),
             )
             metrics[f"{prefix}/unresolve_rate_percent"] = self._percent(
-                len(seed_completed) - seed_resolved,
+                seed_unresolved,
                 len(seed_completed),
             )
         return metrics
