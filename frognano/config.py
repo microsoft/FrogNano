@@ -93,6 +93,35 @@ class KubernetesConfig:
 
 
 @dataclass(frozen=True)
+class WandbConfig:
+    entity: str
+    project: str
+    base_url: str = "https://api.wandb.ai"
+    api_key_env: str = "WANDB_API_KEY"
+    name: str | None = None
+    group: str | None = None
+    run_id: str | None = None
+    tags: tuple[str, ...] = ()
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "WandbConfig":
+        entity = str(value.get("entity") or "").strip()
+        project = str(value.get("project") or "").strip()
+        if not entity or not project:
+            raise ValueError("wandb.entity and wandb.project are required")
+        return cls(
+            entity=entity,
+            project=project,
+            base_url=str(value.get("base_url") or "https://api.wandb.ai").rstrip("/"),
+            api_key_env=str(value.get("api_key_env") or "WANDB_API_KEY"),
+            name=_optional_string(value.get("name")),
+            group=_optional_string(value.get("group")),
+            run_id=_optional_string(value.get("run_id")),
+            tags=tuple(str(tag) for tag in value.get("tags") or ()),
+        )
+
+
+@dataclass(frozen=True)
 class EvalConfig:
     dataset: str
     output_dir: Path
@@ -109,6 +138,7 @@ class EvalConfig:
     max_total_time_sec: int | None = None
     resume: bool = True
     cache_dir: Path = Path("~/.cache/frognano/harbor").expanduser()
+    wandb: WandbConfig | None = None
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "EvalConfig":
@@ -117,6 +147,7 @@ class EvalConfig:
             raise ValueError("dataset is required")
         num_tasks = value.get("num_tasks")
         max_total_time = value.get("max_total_time_sec")
+        wandb = value.get("wandb")
         config = cls(
             dataset=dataset,
             output_dir=Path(str(value.get("output_dir") or "eval-results")),
@@ -135,6 +166,9 @@ class EvalConfig:
             ),
             resume=bool(value.get("resume", True)),
             cache_dir=Path(str(value.get("cache_dir") or "~/.cache/frognano/harbor")),
+            wandb=(
+                WandbConfig.from_dict(dict(wandb)) if isinstance(wandb, dict) else None
+            ),
         )
         for name in (
             "seeds_per_task",
@@ -152,6 +186,11 @@ class EvalConfig:
         ):
             raise ValueError("max_total_time_sec must be between 60 and 7200")
         return config
+
+
+def _optional_string(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
 
 
 def load_config(path: str | Path) -> EvalConfig:

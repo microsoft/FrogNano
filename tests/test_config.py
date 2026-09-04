@@ -59,6 +59,36 @@ def test_load_config_reads_packaged_config_by_name() -> None:
     assert config.model.name == "Qwen/Qwen3.5-4B"
 
 
+def test_load_config_reads_wandb_settings(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WANDB_HOST", "https://wandb.example.test")
+    config_path = tmp_path / "eval.yaml"
+    config_path.write_text(
+        """
+dataset: swebench_verified
+model:
+  name: test-model
+  base_url: http://model.test/v1
+kubernetes: {}
+wandb:
+  base_url: ${WANDB_HOST}
+  entity: research
+  project: evaluations
+  name: smoke-run
+  tags: [smoke, leaf]
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.wandb is not None
+    assert config.wandb.base_url == "https://wandb.example.test"
+    assert config.wandb.entity == "research"
+    assert config.wandb.project == "evaluations"
+    assert config.wandb.name == "smoke-run"
+    assert config.wandb.tags == ("smoke", "leaf")
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -88,3 +118,15 @@ def test_config_requires_dataset_and_model() -> None:
         EvalConfig.from_dict({})
     with pytest.raises(ValueError, match="model.name"):
         EvalConfig.from_dict({"dataset": "swebench_verified"})
+
+
+def test_config_requires_wandb_entity_and_project() -> None:
+    raw = {
+        "dataset": "swebench_verified",
+        "model": {"name": "model", "base_url": "http://localhost/v1"},
+        "kubernetes": {},
+        "wandb": {"entity": "research"},
+    }
+
+    with pytest.raises(ValueError, match="wandb.entity and wandb.project"):
+        EvalConfig.from_dict(raw)

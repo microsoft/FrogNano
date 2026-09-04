@@ -47,6 +47,7 @@ def test_run_evaluation_writes_results_and_summary(tmp_path, monkeypatch) -> Non
 
     assert summary["jobs_completed"] == 2
     assert summary["resolved"] == 1
+    assert summary["unresolved"] == 1
     assert summary["resolve_rate"] == 0.5
     assert summary["error_rate"] == 0.0
     assert (tmp_path / "config.json").is_file()
@@ -224,6 +225,7 @@ def test_run_job_returns_all_attempt_errors(tmp_path, monkeypatch) -> None:
     result = runner._run_job(config, task, 0, "key")
 
     assert result["status"] == "failed"
+    assert result["exit_reason"] == "infrastructure_error"
     assert result["error"].count("cannot create pod") == config.max_attempts
 
 
@@ -270,5 +272,6 @@ def test_run_job_retries_leaf_infrastructure_failures(tmp_path, monkeypatch) -> 
     result = runner._run_job(config, task, 0, "key")
 
     assert result["status"] == "failed"
+    assert result["exit_reason"] == "llm_query_error"
     assert len(calls) == config.max_attempts
     assert result["error"].count("retryable Leaf failure") == config.max_attempts

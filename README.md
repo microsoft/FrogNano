@@ -116,6 +116,33 @@ mirror, set:
 export K8S_IMAGE_REGISTRY=registry.example.com
 ```
 
+### Track an evaluation with W&B
+
+Install the optional W&B integration:
+
+```bash
+python -m pip install \
+  "frognano[wandb] @ git+https://github.com/microsoft/FrogNano.git"
+```
+
+Set `WANDB_API_KEY` and add a `wandb` block to the evaluation configuration:
+
+```yaml
+wandb:
+  base_url: https://api.wandb.ai
+  entity: example-team
+  project: coding-agent-evaluations
+  name: swebench-verified
+  tags: [leaf, swebench]
+```
+
+FrogNano logs resolve, unresolve, and error percentages in an `overall` section
+and one section per seed. Overall also includes completed percentage, result
+totals, and stop-reason totals. Errors are rollouts that did not produce a valid
+benchmark result. FrogNano uploads `config.json`, `results.jsonl`, and
+`summary.json` at completion. The W&B run ID is stored in the output directory
+so resumed evaluations continue writing to the same run.
+
 ## Outputs
 
 Each run writes:

@@ -28,6 +28,9 @@ Issues = "https://github.com/microsoft/FrogNano/issues"
 frognano-eval = "frognano.cli:main"
 
 [project.optional-dependencies]
+wandb = [
+    "wandb==0.29.0",
+]
 dev = [
     "black==26.5.1",
     "isort==8.0.1",
