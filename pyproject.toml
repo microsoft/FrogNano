@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "frognano"
-version = "0.0.0"
+version = "0.1.0"
 description = "FrogNano"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -12,10 +12,20 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.12",
 ]
+dependencies = [
+    "kubernetes==36.0.3",
+    "openai==3.3.1",
+    "PyYAML==6.0.3",
+    "tiktoken==0.14.0",
+    "transformers==5.16.1",
+]
 
 [project.urls]
 Repository = "https://github.com/microsoft/FrogNano"
 Issues = "https://github.com/microsoft/FrogNano/issues"
+
+[project.scripts]
+frognano-eval = "frognano.cli:main"
 
 [project.optional-dependencies]
 dev = [
@@ -25,6 +35,12 @@ dev = [
     "pytest-cov==7.1.0",
     "pytest-xdist==3.8.0",
 ]
+
+[tool.setuptools.packages.find]
+include = ["frognano*"]
+
+[tool.setuptools.package-data]
+"frognano.configs.eval" = ["*.yaml"]
 
 [tool.black]
 line-length = 88
@@ -38,4 +54,9 @@ addopts = [
     "--cov=frognano",
     "--cov-report=term-missing",
     "--cov-fail-under=85",
+]
+
+[tool.coverage.run]
+omit = [
+    "frognano/runtimes/kubernetes.py",
 ]
