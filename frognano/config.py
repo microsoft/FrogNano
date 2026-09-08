@@ -127,6 +127,7 @@ class EvalConfig:
     output_dir: Path
     model: ModelConfig
     kubernetes: KubernetesConfig
+    image_digest_lock: Path | None = None
     task_ids: tuple[str, ...] = ()
     num_tasks: int | None = None
     seed: int = 42
@@ -153,6 +154,11 @@ class EvalConfig:
             output_dir=Path(str(value.get("output_dir") or "eval-results")),
             model=ModelConfig.from_dict(dict(value.get("model") or {})),
             kubernetes=KubernetesConfig.from_dict(dict(value.get("kubernetes") or {})),
+            image_digest_lock=(
+                _resolve_image_digest_lock(str(value["image_digest_lock"]))
+                if value.get("image_digest_lock")
+                else None
+            ),
             task_ids=tuple(str(item) for item in value.get("task_ids") or ()),
             num_tasks=None if num_tasks is None else int(num_tasks),
             seed=int(value.get("seed", 42)),
@@ -191,6 +197,14 @@ class EvalConfig:
 def _optional_string(value: Any) -> str | None:
     text = str(value or "").strip()
     return text or None
+
+
+def _resolve_image_digest_lock(value: str) -> Path:
+    path = Path(value)
+    if path.is_file() or path.is_absolute() or path.parent != Path(".") or path.suffix:
+        return path
+    packaged = files("frognano.configs.eval.image_locks").joinpath(f"{value}.json")
+    return Path(str(packaged)) if packaged.is_file() else path
 
 
 def load_config(path: str | Path) -> EvalConfig:

@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from frognano import runner
@@ -53,6 +54,49 @@ def test_run_evaluation_writes_results_and_summary(tmp_path, monkeypatch) -> Non
     assert (tmp_path / "config.json").is_file()
     assert (tmp_path / "summary.json").is_file()
     assert len((tmp_path / "results.jsonl").read_text().splitlines()) == 2
+
+
+def test_run_evaluation_applies_image_digest_lock(tmp_path, monkeypatch) -> None:
+    digest = "sha256:" + ("a" * 64)
+    lock = tmp_path / "images.json"
+    lock.write_text(
+        json.dumps({"images": [{"task_id": "task-a", "digest": digest}]}),
+        encoding="utf-8",
+    )
+    base_config = _config(tmp_path)
+    registry = "registry.test:5000/mirror"
+    config = replace(
+        base_config,
+        image_digest_lock=lock,
+        kubernetes=replace(base_config.kubernetes, image_registry=registry),
+    )
+    tasks = [{"instance_id": "task-a", "docker_image": f"{registry}/example:latest"}]
+    monkeypatch.setenv("TEST_MODEL_KEY", "secret")
+
+    def load_dataset(*args, **kwargs):
+        assert kwargs["image_registry"] == registry
+        return tasks
+
+    monkeypatch.setattr(runner, "load_dataset", load_dataset)
+
+    def run_job(config, task, seed, api_key, stop_event):
+        assert task["docker_image"] == f"{registry}/example@{digest}"
+        return {
+            "instance_id": task["instance_id"],
+            "seed": seed,
+            "status": "completed",
+            "reward": 1,
+        }
+
+    monkeypatch.setattr(runner, "_run_job", run_job)
+
+    summary = runner.run_evaluation(config)
+
+    assert summary["resolved"] == 1
+    assert tasks[0]["docker_image"] == f"{registry}/example:latest"
+    saved_config = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert saved_config["image_digest_lock"] == str(lock)
+    assert saved_config["kubernetes"]["image_registry"] == registry
 
 
 def test_run_evaluation_resumes_completed_jobs(tmp_path, monkeypatch) -> None:

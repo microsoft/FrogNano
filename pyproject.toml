@@ -44,6 +44,7 @@ include = ["frognano*"]
 
 [tool.setuptools.package-data]
 "frognano.configs.eval" = ["*.yaml"]
+"frognano.configs.eval.image_locks" = ["*.json"]
 
 [tool.black]
 line-length = 88

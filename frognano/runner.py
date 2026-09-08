@@ -15,6 +15,7 @@ from typing import Any
 
 from frognano.config import EvalConfig
 from frognano.datasets import load_dataset
+from frognano.datasets.harbor import apply_image_digest_lock
 from frognano.harness.leaf import LeafAgent, LeafConfig
 from frognano.harness.leaf.environment import LeafEnvironment
 from frognano.runtimes import KubernetesTaskRuntime
@@ -45,6 +46,8 @@ def run_evaluation(config: EvalConfig) -> dict[str, Any]:
     random.Random(config.seed).shuffle(tasks)
     if config.num_tasks is not None:
         tasks = tasks[: config.num_tasks]
+    if config.image_digest_lock is not None:
+        tasks = apply_image_digest_lock(tasks, config.image_digest_lock)
     jobs = [(task, seed) for task in tasks for seed in range(config.seeds_per_task)]
     latest_results = _latest_results(results_path)
     processed = _processed_jobs(results_path) if config.resume else set()
@@ -345,4 +348,6 @@ def _config_dict(config: EvalConfig) -> dict[str, Any]:
     value = asdict(config)
     value["output_dir"] = str(config.output_dir)
     value["cache_dir"] = str(config.cache_dir)
+    if config.image_digest_lock is not None:
+        value["image_digest_lock"] = str(config.image_digest_lock)
     return value

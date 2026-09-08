@@ -13,6 +13,7 @@ def test_load_config_expands_environment_and_defaults(tmp_path, monkeypatch) -> 
         """
 dataset: swebench_verified
 output_dir: ${EVAL_ROOT}/results
+image_digest_lock: ${EVAL_ROOT}/images.json
 model:
   name: test-model
   base_url: http://model.test/v1/
@@ -26,6 +27,7 @@ kubernetes:
     config = load_config(config_path)
 
     assert config.output_dir == tmp_path / "results"
+    assert config.image_digest_lock == tmp_path / "images.json"
     assert config.model.base_url == "http://model.test/v1"
     assert config.kubernetes.namespace == "eval"
     assert config.kubernetes.image_registry == "registry.test"
@@ -57,6 +59,32 @@ def test_load_config_reads_packaged_config_by_name() -> None:
 
     assert config.dataset == "swebench_verified"
     assert config.model.name == "Qwen/Qwen3.5-4B"
+
+
+@pytest.mark.parametrize(
+    "name", ["swebench-verified", "swebench-pro", "terminal-bench-2", "patch-eval"]
+)
+def test_packaged_configs_read_image_registry_environment(monkeypatch, name) -> None:
+    monkeypatch.setenv("K8S_IMAGE_REGISTRY", "mirror.example:5000/benchmarks/")
+
+    config = load_config(name)
+
+    assert config.kubernetes.image_registry == "mirror.example:5000/benchmarks"
+
+
+def test_config_resolves_packaged_image_digest_lock() -> None:
+    config = EvalConfig.from_dict(
+        {
+            "dataset": "swebench_verified",
+            "model": {"name": "model", "base_url": "http://model/v1"},
+            "image_digest_lock": "sweb-v-20260904",
+        }
+    )
+
+    assert config.image_digest_lock is not None
+    assert config.image_digest_lock.name == "sweb-v-20260904.json"
+    assert config.image_digest_lock.parent.name == "image_locks"
+    assert config.image_digest_lock.is_file()
 
 
 def test_load_config_reads_wandb_settings(tmp_path, monkeypatch) -> None:

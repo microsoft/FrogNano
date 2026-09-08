@@ -4,10 +4,18 @@ import argparse
 import json
 import logging
 from collections.abc import Sequence
+from dataclasses import replace
 
 from frognano.config import load_config
 from frognano.datasets import get_dataset
 from frognano.runner import run_evaluation
+
+
+def _parse_image_registry(value: str) -> str:
+    registry = value.strip().rstrip("/")
+    if not registry:
+        raise argparse.ArgumentTypeError("image registry must be non-empty")
+    return registry
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -21,6 +29,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         required=True,
         help="Path to a YAML config or bundled config name",
+    )
+    run.add_argument(
+        "--image-registry",
+        type=_parse_image_registry,
+        help=(
+            "Registry prefix for unqualified task images "
+            "(overrides kubernetes.image_registry)"
+        ),
     )
     inspect = subparsers.add_parser("dataset", help="Show a registered dataset source")
     inspect.add_argument("name")
@@ -42,7 +58,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         source, _ = get_dataset(args.name)
         print(json.dumps(source.__dict__, indent=2))
         return 0
-    summary = run_evaluation(load_config(args.config))
+    config = load_config(args.config)
+    if args.image_registry is not None:
+        config = replace(
+            config,
+            kubernetes=replace(config.kubernetes, image_registry=args.image_registry),
+        )
+    summary = run_evaluation(config)
     print(json.dumps(summary, indent=2))
     return 0 if summary["jobs_failed"] == 0 else 1
 
