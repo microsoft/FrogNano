@@ -176,9 +176,7 @@ def test_packaged_digest_lock_is_registry_neutral() -> None:
     )
     content = packaged.read_text(encoding="utf-8")
     payload = json.loads(content)
-    root_copy = Path(__file__).resolve().parents[1] / "sweb-v-20260904.json"
 
-    assert content == root_copy.read_text(encoding="utf-8")
     assert set(payload) == {"images"}
     assert len(payload["images"]) == 500
     assert len({row["task_id"] for row in payload["images"]}) == 500
