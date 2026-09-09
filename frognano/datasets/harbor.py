@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -13,6 +14,7 @@ from typing import Any
 from frognano.datasets.source import DatasetSource
 
 _REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
+_IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}")
 
 
@@ -22,6 +24,68 @@ class DockerfileRuntime:
     workdir: str
     environment: dict[str, str]
     setup_commands: tuple[str, ...]
+
+
+def apply_image_digest_lock(
+    tasks: list[dict[str, Any]],
+    path: Path,
+) -> list[dict[str, Any]]:
+    digests = _load_image_digest_lock(path)
+    pinned = []
+    for task in tasks:
+        task_id = str(task["instance_id"])
+        try:
+            digest = digests[task_id]
+        except KeyError as exc:
+            raise ValueError(
+                f"image digest lock {path} has no digest for task {task_id!r}"
+            ) from exc
+        item = dict(task)
+        for field_name in ("docker_image", "verifier_docker_image"):
+            image = item.get(field_name)
+            if image is not None:
+                item[field_name] = _pin_image_digest(str(image), digest)
+        pinned.append(item)
+    return pinned
+
+
+def _load_image_digest_lock(path: Path) -> dict[str, str]:
+    try:
+        payload = json.loads(path.expanduser().read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"could not load image digest lock {path}: {exc}") from exc
+    rows = payload.get("images") if isinstance(payload, dict) else None
+    if not isinstance(rows, list):
+        raise ValueError(f"image digest lock {path} must contain an images list")
+    digests: dict[str, str] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            raise ValueError(f"image digest lock {path} contains a non-object row")
+        task_id = row.get("task_id")
+        digest = row.get("digest")
+        if not isinstance(task_id, str) or not task_id:
+            raise ValueError(f"image digest lock {path} contains an invalid task_id")
+        if not isinstance(digest, str) or not _IMAGE_DIGEST_RE.fullmatch(digest):
+            raise ValueError(
+                f"image digest lock {path} contains an invalid digest for {task_id}"
+            )
+        if task_id in digests:
+            raise ValueError(
+                f"image digest lock {path} contains duplicate task {task_id}"
+            )
+        digests[task_id] = digest
+    if not digests:
+        raise ValueError(f"image digest lock {path} contains no images")
+    return digests
+
+
+def _pin_image_digest(image: str, digest: str) -> str:
+    image = image.split("@", 1)[0]
+    slash = image.rfind("/")
+    colon = image.rfind(":")
+    if colon > slash:
+        image = image[:colon]
+    return f"{image}@{digest}"
 
 
 def materialize_source(source: DatasetSource, cache_dir: Path) -> Path:

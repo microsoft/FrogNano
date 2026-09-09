@@ -13,6 +13,7 @@ def test_load_config_expands_environment_and_defaults(tmp_path, monkeypatch) -> 
         """
 dataset: swebench_verified
 output_dir: ${EVAL_ROOT}/results
+image_digest_lock: ${EVAL_ROOT}/images.json
 model:
   name: test-model
   base_url: http://model.test/v1/
@@ -26,6 +27,7 @@ kubernetes:
     config = load_config(config_path)
 
     assert config.output_dir == tmp_path / "results"
+    assert config.image_digest_lock == tmp_path / "images.json"
     assert config.model.base_url == "http://model.test/v1"
     assert config.kubernetes.namespace == "eval"
     assert config.kubernetes.image_registry == "registry.test"
@@ -60,6 +62,62 @@ def test_load_config_reads_packaged_config_by_name() -> None:
 
 
 @pytest.mark.parametrize(
+    "name", ["swebench-verified", "swebench-pro", "terminal-bench-2", "patch-eval"]
+)
+def test_packaged_configs_read_image_registry_environment(monkeypatch, name) -> None:
+    monkeypatch.setenv("K8S_IMAGE_REGISTRY", "mirror.example:5000/benchmarks/")
+
+    config = load_config(name)
+
+    assert config.kubernetes.image_registry == "mirror.example:5000/benchmarks"
+
+
+def test_config_resolves_packaged_image_digest_lock() -> None:
+    config = EvalConfig.from_dict(
+        {
+            "dataset": "swebench_verified",
+            "model": {"name": "model", "base_url": "http://model/v1"},
+            "image_digest_lock": "sweb-v-20260904",
+        }
+    )
+
+    assert config.image_digest_lock is not None
+    assert config.image_digest_lock.name == "sweb-v-20260904.json"
+    assert config.image_digest_lock.parent.name == "image_locks"
+    assert config.image_digest_lock.is_file()
+
+
+def test_load_config_reads_wandb_settings(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("WANDB_HOST", "https://wandb.example.test")
+    config_path = tmp_path / "eval.yaml"
+    config_path.write_text(
+        """
+dataset: swebench_verified
+model:
+  name: test-model
+  base_url: http://model.test/v1
+kubernetes: {}
+wandb:
+  base_url: ${WANDB_HOST}
+  entity: research
+  project: evaluations
+  name: smoke-run
+  tags: [smoke, leaf]
+""",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+
+    assert config.wandb is not None
+    assert config.wandb.base_url == "https://wandb.example.test"
+    assert config.wandb.entity == "research"
+    assert config.wandb.project == "evaluations"
+    assert config.wandb.name == "smoke-run"
+    assert config.wandb.tags == ("smoke", "leaf")
+
+
+@pytest.mark.parametrize(
     ("field", "value", "message"),
     [
         ("max_workers", 0, "max_workers must be positive"),
@@ -88,3 +146,15 @@ def test_config_requires_dataset_and_model() -> None:
         EvalConfig.from_dict({})
     with pytest.raises(ValueError, match="model.name"):
         EvalConfig.from_dict({"dataset": "swebench_verified"})
+
+
+def test_config_requires_wandb_entity_and_project() -> None:
+    raw = {
+        "dataset": "swebench_verified",
+        "model": {"name": "model", "base_url": "http://localhost/v1"},
+        "kubernetes": {},
+        "wandb": {"entity": "research"},
+    }
+
+    with pytest.raises(ValueError, match="wandb.entity and wandb.project"):
+        EvalConfig.from_dict(raw)

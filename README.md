@@ -109,12 +109,73 @@ task_ids:
   - astropy__astropy-12907
 ```
 
-Benchmark images resolve through Docker Hub by default. To use a registry
-mirror, set:
+Benchmark images resolve through Docker Hub by default. The bundled
+configurations read the registry from `K8S_IMAGE_REGISTRY`:
 
 ```bash
 export K8S_IMAGE_REGISTRY=registry.example.com
 ```
+
+Alternatively, set the registry in a copied YAML configuration:
+
+```yaml
+kubernetes:
+  image_registry: registry.example.com
+```
+
+Use `image_registry: ${K8S_IMAGE_REGISTRY:-}` in a custom configuration to
+read it from the environment. A command-line parameter overrides either form:
+
+```bash
+frognano-eval run --config eval.yaml --image-registry registry.example.com
+```
+
+Registry prefixes may include a port or mirror namespace, such as
+`registry.example.com:5000/benchmarks`. They apply to task images without an
+explicit registry; fully qualified image references are unchanged.
+
+To pin each selected task image to an immutable digest, provide a Harbor image
+lock containing an `images` list with `task_id` and `digest` fields:
+
+```yaml
+image_digest_lock: /path/to/sweb-v-20260904.json
+```
+
+FrogNano replaces each task image tag with the matching `@sha256:...` digest
+and fails before launching work if a selected task is missing from the lock.
+The configured image registry is preserved. Use
+`image_digest_lock: sweb-v-20260904` to select the bundled Verified lock.
+The lock contains only an `images` list of `task_id`/`digest` pairs. The pinned
+task catalog supplies image repositories, and the YAML/environment/CLI setting
+selects the registry. A mirror must provide the same image repositories and
+immutable digests.
+
+### Track an evaluation with W&B
+
+Install the optional W&B integration:
+
+```bash
+python -m pip install \
+  "frognano[wandb] @ git+https://github.com/microsoft/FrogNano.git"
+```
+
+Set `WANDB_API_KEY` and add a `wandb` block to the evaluation configuration:
+
+```yaml
+wandb:
+  base_url: https://api.wandb.ai
+  entity: example-team
+  project: coding-agent-evaluations
+  name: swebench-verified
+  tags: [leaf, swebench]
+```
+
+FrogNano logs resolve, unresolve, and error percentages in an `overall` section
+and one section per seed. Overall also includes completed percentage, result
+totals, and stop-reason totals. Errors are rollouts that did not produce a valid
+benchmark result. FrogNano uploads `config.json`, `results.jsonl`, and
+`summary.json` at completion. The W&B run ID is stored in the output directory
+so resumed evaluations continue writing to the same run.
 
 ## Outputs
 

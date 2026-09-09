@@ -1,10 +1,12 @@
 import json
+from importlib.resources import files
 from pathlib import Path
 
 import pytest
 
 from frognano.datasets import DatasetSource, get_dataset, harbor
 from frognano.datasets.harbor import (
+    apply_image_digest_lock,
     load_harbor_dataset,
     materialize_source,
     parse_dockerfile,
@@ -130,6 +132,96 @@ def test_parse_harbor_task_qualifies_single_segment_image(tmp_path) -> None:
     )
 
     assert task["docker_image"] == "registry.test/ubuntu"
+
+
+@pytest.mark.parametrize("registry", ["registry.test", "localhost:5000/mirror"])
+def test_apply_image_digest_lock_pins_task_images(tmp_path, registry) -> None:
+    digest = "sha256:" + ("a" * 64)
+    lock = tmp_path / "images.json"
+    lock.write_text(
+        json.dumps(
+            {
+                "registry": "capture.example",
+                "images": [
+                    {
+                        "task_id": "owner__repo-1",
+                        "digest": digest,
+                        "image": "capture.example/example:latest",
+                        "digest_image": f"capture.example/example@{digest}",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    [task] = apply_image_digest_lock(
+        [
+            {
+                "instance_id": "owner__repo-1",
+                "docker_image": f"{registry}/example:latest",
+                "verifier_docker_image": f"{registry}/verifier:1",
+            }
+        ],
+        lock,
+    )
+
+    assert task["docker_image"] == f"{registry}/example@{digest}"
+    assert task["verifier_docker_image"] == f"{registry}/verifier@{digest}"
+
+
+def test_packaged_digest_lock_is_registry_neutral() -> None:
+    packaged = files("frognano.configs.eval.image_locks").joinpath(
+        "sweb-v-20260904.json"
+    )
+    content = packaged.read_text(encoding="utf-8")
+    payload = json.loads(content)
+
+    assert set(payload) == {"images"}
+    assert len(payload["images"]) == 500
+    assert len({row["task_id"] for row in payload["images"]}) == 500
+    for row in payload["images"]:
+        assert set(row) == {"task_id", "digest"}
+    digests = harbor._load_image_digest_lock(Path(str(packaged)))
+    tasks = [
+        {
+            "instance_id": task_id,
+            "docker_image": "mirror.example:5000/swebench/example:latest",
+        }
+        for task_id in digests
+    ]
+
+    pinned = apply_image_digest_lock(tasks, Path(str(packaged)))
+
+    assert len(pinned) == 500
+    assert all(
+        task["docker_image"]
+        == f"mirror.example:5000/swebench/example@{digests[task['instance_id']]}"
+        for task in pinned
+    )
+
+
+def test_apply_image_digest_lock_rejects_missing_task(tmp_path) -> None:
+    lock = tmp_path / "images.json"
+    lock.write_text(
+        json.dumps(
+            {
+                "images": [
+                    {
+                        "task_id": "other",
+                        "digest": "sha256:" + ("a" * 64),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="no digest for task 'missing'"):
+        apply_image_digest_lock(
+            [{"instance_id": "missing", "docker_image": "example:latest"}],
+            lock,
+        )
 
 
 def test_parse_dockerfile_rejects_multiple_stages(tmp_path) -> None:

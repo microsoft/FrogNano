@@ -15,9 +15,11 @@ from typing import Any
 
 from frognano.config import EvalConfig
 from frognano.datasets import load_dataset
+from frognano.datasets.harbor import apply_image_digest_lock
 from frognano.harness.leaf import LeafAgent, LeafConfig
 from frognano.harness.leaf.environment import LeafEnvironment
 from frognano.runtimes import KubernetesTaskRuntime
+from frognano.wandb import WandbTracker
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +46,23 @@ def run_evaluation(config: EvalConfig) -> dict[str, Any]:
     random.Random(config.seed).shuffle(tasks)
     if config.num_tasks is not None:
         tasks = tasks[: config.num_tasks]
+    if config.image_digest_lock is not None:
+        tasks = apply_image_digest_lock(tasks, config.image_digest_lock)
     jobs = [(task, seed) for task in tasks for seed in range(config.seeds_per_task)]
+    latest_results = _latest_results(results_path)
     processed = _processed_jobs(results_path) if config.resume else set()
+    tracker = (
+        WandbTracker(
+            config.wandb,
+            run_config=_config_dict(config),
+            output_dir=output_dir,
+            jobs_total=len(jobs),
+            seeds_per_task=config.seeds_per_task,
+            initial_results=latest_results,
+        )
+        if config.wandb is not None
+        else None
+    )
     jobs = [
         (task, seed)
         for task, seed in jobs
@@ -82,11 +99,14 @@ def run_evaluation(config: EvalConfig) -> dict[str, Any]:
                         "seed": seed,
                         "status": "failed",
                         "reward": 0.0,
+                        "exit_reason": "internal_error",
                         "error": f"{type(exc).__name__}: {exc}",
                     }
                 with write_lock:
                     with results_path.open("a", encoding="utf-8") as stream:
                         stream.write(json.dumps(result, default=str) + "\n")
+                    if tracker is not None:
+                        tracker.update(result)
     finally:
         _restore_stop_handlers(previous_handlers)
 
@@ -111,6 +131,7 @@ def run_evaluation(config: EvalConfig) -> dict[str, Any]:
         "jobs_completed": len(completed),
         "jobs_failed": len(results) - len(completed),
         "resolved": resolved,
+        "unresolved": len(completed) - resolved,
         "resolve_rate": resolved / jobs_total if jobs_total else 0.0,
         "error_rate": (
             (jobs_total - len(completed)) / jobs_total if jobs_total else 0.0
@@ -118,6 +139,8 @@ def run_evaluation(config: EvalConfig) -> dict[str, Any]:
         "duration_sec": time.time() - started,
     }
     _write_json(output_dir / "summary.json", summary)
+    if tracker is not None:
+        tracker.finish(summary)
     return summary
 
 
@@ -132,6 +155,7 @@ def _run_job(
     task_dir = config.output_dir.expanduser() / "trajectories" / instance_id
     task_dir.mkdir(parents=True, exist_ok=True)
     errors: list[str] = []
+    last_exit_reason = "infrastructure_error"
     for attempt in range(1, config.max_attempts + 1):
         if stop_event is not None and stop_event.is_set():
             return _cancelled_result(task, seed, attempt)
@@ -182,6 +206,7 @@ def _run_job(
                 "tool_error",
                 "unknown",
             }:
+                last_exit_reason = trajectory["exit_reason"]
                 raise RuntimeError(
                     "retryable Leaf failure: "
                     f"{trajectory['exit_reason']}: {trajectory.get('error')}"
@@ -228,6 +253,7 @@ def _run_job(
         "attempt": config.max_attempts,
         "status": "failed",
         "reward": 0.0,
+        "exit_reason": last_exit_reason,
         "error": "\n".join(errors),
         "source": task["source"],
     }
@@ -322,4 +348,6 @@ def _config_dict(config: EvalConfig) -> dict[str, Any]:
     value = asdict(config)
     value["output_dir"] = str(config.output_dir)
     value["cache_dir"] = str(config.cache_dir)
+    if config.image_digest_lock is not None:
+        value["image_digest_lock"] = str(config.image_digest_lock)
     return value
