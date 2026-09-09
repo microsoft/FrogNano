@@ -33,7 +33,7 @@ wandb = [
 ]
 dev = [
     "black==26.5.1",
-    "isort==8.0.1",
+    "isort==9.0.1",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "pytest-xdist==3.8.0",
