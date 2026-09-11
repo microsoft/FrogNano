@@ -173,6 +173,18 @@ class WandbTracker:
                 seed_unresolved,
                 len(seed_completed),
             )
+        if self.seeds_per_task == 3:
+            resolved_tasks = {
+                instance_id
+                for (instance_id, seed), result in self.results.items()
+                if 0 <= seed < 3 and self._outcome(result) == "resolved"
+            }
+            tasks_total = self.jobs_total // self.seeds_per_task
+            metrics["overall/pass_at_3_percent"] = self._percent(
+                len(resolved_tasks), tasks_total
+            )
+            metrics["overall/pass_at_3_resolved_tasks"] = len(resolved_tasks)
+            metrics["overall/pass_at_3_total_tasks"] = tasks_total
         return metrics
 
     def finish(self, summary: dict[str, Any]) -> None:

@@ -2,11 +2,14 @@ import json
 import sys
 from types import SimpleNamespace
 
+import pytest
+
 from frognano.config import WandbConfig
 from frognano.wandb import WandbTracker
 
 
-def test_wandb_tracker_logs_progress_and_resumes_run(tmp_path, monkeypatch) -> None:
+@pytest.fixture
+def wandb_runs(monkeypatch):
     runs = []
 
     class Run:
@@ -65,6 +68,11 @@ def test_wandb_tracker_logs_progress_and_resumes_run(tmp_path, monkeypatch) -> N
     )
     monkeypatch.setitem(sys.modules, "wandb", fake_wandb)
     monkeypatch.setenv("WANDB_API_KEY", "secret")
+    return runs
+
+
+def test_wandb_tracker_logs_progress_and_resumes_run(tmp_path, wandb_runs) -> None:
+    runs = wandb_runs
     config = WandbConfig(
         entity="research",
         project="evaluations",
@@ -176,3 +184,123 @@ def test_wandb_tracker_logs_progress_and_resumes_run(tmp_path, monkeypatch) -> N
 
     assert runs[1].init_kwargs["id"] == state["run_id"]
     second.finish({})
+
+
+def _result(task, seed, *, reward=0, status="completed"):
+    return {
+        "instance_id": task,
+        "seed": seed,
+        "status": status,
+        "reward": reward,
+    }
+
+
+def _tracker(tmp_path, *, tasks=3, seeds=3, results=()):
+    return WandbTracker(
+        WandbConfig(entity="research", project="evaluations"),
+        run_config={"dataset": "test"},
+        output_dir=tmp_path,
+        jobs_total=tasks * seeds,
+        seeds_per_task=seeds,
+        initial_results={
+            (result["instance_id"], result["seed"]): result for result in results
+        },
+    )
+
+
+def test_pass_at_3_counts_any_success_once_with_all_tasks_as_denominator(
+    tmp_path, wandb_runs
+):
+    tracker = _tracker(tmp_path)
+    run = wandb_runs[0]
+    assert run.logs[-1]["overall/pass_at_3_percent"] == 0
+    assert run.logs[-1]["overall/pass_at_3_total_tasks"] == 3
+
+    tracker.update(_result("task-a", 0, reward=1))
+    assert run.logs[-1]["overall/pass_at_3_percent"] == pytest.approx(100 / 3)
+    for result in (
+        _result("task-a", 1, reward=1),
+        _result("task-a", 2, reward=0),
+        _result("task-b", 0),
+        _result("task-b", 1),
+        _result("task-b", 2),
+        _result("task-c", 0, status="failed"),
+        _result("task-c", 1),
+    ):
+        tracker.update(result)
+    metrics = run.logs[-1]
+    assert metrics["overall/pass_at_3_percent"] == pytest.approx(100 / 3)
+    assert metrics["overall/pass_at_3_resolved_tasks"] == 1
+    assert metrics["overall/pass_at_3_total_tasks"] == 3
+    assert metrics["overall/execution_task_resolve_percent"] == 25
+
+    tracker.update(_result("task-c", 2, reward=1))
+    tracker.finish({})
+    assert run.summary["overall/pass_at_3_percent"] == pytest.approx(200 / 3)
+    assert run.summary["overall/pass_at_3_resolved_tasks"] == 2
+    assert run.summary["overall/pass_at_3_total_tasks"] == 3
+    assert run.summary["overall/execution_task_resolve_percent"] == pytest.approx(
+        100 / 3
+    )
+    assert run.summary["seed-2/resolve_rate_percent"] == pytest.approx(100 / 3)
+
+
+@pytest.mark.parametrize(
+    "status,reward,expected",
+    [
+        ("completed", 0, 0),
+        ("completed", 0.5, 0),
+        ("completed", 1, 100),
+        ("completed", 2, 100),
+        ("failed", 0, 0),
+        ("failed", 1, 0),
+    ],
+)
+def test_pass_at_3_uses_completed_resolved_results(
+    tmp_path, wandb_runs, status, reward, expected
+):
+    _tracker(
+        tmp_path,
+        tasks=1,
+        results=[_result("task-a", 2, status=status, reward=reward)],
+    )
+    assert wandb_runs[0].logs[-1]["overall/pass_at_3_percent"] == expected
+
+
+def test_pass_at_3_restores_on_resume_and_retries_replace_seed_results(
+    tmp_path, wandb_runs
+):
+    results = [
+        _result("task-a", 0, reward=1),
+        _result("task-a", 1, reward=1),
+        _result("task-a", 2),
+        _result("task-b", 0),
+        _result("task-b", 1, status="failed"),
+        _result("task-b", 2),
+    ]
+    _tracker(tmp_path, tasks=2, results=results)
+    tracker = _tracker(tmp_path, tasks=2, results=results)
+    assert wandb_runs[0].init_kwargs["id"] == wandb_runs[1].init_kwargs["id"]
+    assert wandb_runs[1].logs[0]["overall/pass_at_3_percent"] == 50
+    tracker.update(_result("task-b", 1, reward=1))
+    tracker.update(_result("task-b", 1, reward=1))
+    assert wandb_runs[1].logs[-1]["overall/pass_at_3_percent"] == 100
+    assert wandb_runs[1].logs[-1]["overall/pass_at_3_resolved_tasks"] == 2
+    assert len(tracker.results) == 6
+
+    tracker.update(_result("task-b", 1))
+    assert wandb_runs[1].logs[-1]["overall/pass_at_3_percent"] == 50
+
+
+@pytest.mark.parametrize("seeds", [1, 2, 4])
+def test_pass_at_3_is_not_mislabeled_for_other_seed_counts(tmp_path, wandb_runs, seeds):
+    _tracker(tmp_path, seeds=seeds)
+    assert not any("pass_at_3" in key for key in wandb_runs[0].logs[0])
+
+
+def test_pass_at_3_handles_empty_selection(tmp_path, wandb_runs):
+    tracker = _tracker(tmp_path, tasks=0)
+    tracker.finish({})
+    assert wandb_runs[0].summary["overall/pass_at_3_percent"] == 0
+    assert wandb_runs[0].summary["overall/pass_at_3_resolved_tasks"] == 0
+    assert wandb_runs[0].summary["overall/pass_at_3_total_tasks"] == 0

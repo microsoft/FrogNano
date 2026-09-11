@@ -49,7 +49,16 @@ def run_evaluation(config: EvalConfig) -> dict[str, Any]:
     if config.image_digest_lock is not None:
         tasks = apply_image_digest_lock(tasks, config.image_digest_lock)
     jobs = [(task, seed) for task in tasks for seed in range(config.seeds_per_task)]
-    latest_results = _latest_results(results_path)
+    expected_jobs = {(str(task["instance_id"]), seed) for task, seed in jobs}
+    latest_results = (
+        {
+            key: result
+            for key, result in _latest_results(results_path).items()
+            if key in expected_jobs
+        }
+        if config.resume
+        else {}
+    )
     processed = _processed_jobs(results_path) if config.resume else set()
     tracker = (
         WandbTracker(
@@ -110,11 +119,6 @@ def run_evaluation(config: EvalConfig) -> dict[str, Any]:
     finally:
         _restore_stop_handlers(previous_handlers)
 
-    expected_jobs = {
-        (str(task["instance_id"]), seed)
-        for task in tasks
-        for seed in range(config.seeds_per_task)
-    }
     results = [
         row
         for key, row in _latest_results(results_path).items()

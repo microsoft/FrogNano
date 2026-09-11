@@ -177,6 +177,16 @@ benchmark result. FrogNano uploads `config.json`, `results.jsonl`, and
 `summary.json` at completion. The W&B run ID is stored in the output directory
 so resumed evaluations continue writing to the same run.
 
+For runs with exactly three seeds per task, `overall/pass_at_3_percent` reports
+the percentage of selected tasks solved by **at least one of the three seeds**.
+Each task counts once, regardless of how many seeds solve it. A solved seed
+must have a completed result with reward at least 1; errors and valid zero
+rewards do not count as successes. The denominator includes all selected tasks,
+so the live value is provisional while seeds are still running. W&B also logs
+`overall/pass_at_3_resolved_tasks` and `overall/pass_at_3_total_tasks`. These
+metrics are restored from the latest results on resume and do not replace
+per-rollout or per-seed metrics.
+
 ## Outputs
 
 Each run writes:
