@@ -1,7 +1,6 @@
-dataset: swebench_verified
-output_dir: ${FROGNANO_OUTPUT_ROOT:-~/frognano-eval-results}/swebench-verified
+dataset: terminal_bench_2_verified
+output_dir: ${FROGNANO_OUTPUT_ROOT:-~/frognano-eval-results}/terminal-bench-2-verified
 cache_dir: ${FROGNANO_CACHE_DIR:-~/.cache/frognano/harbor}
-image_digest_lock: sweb-v-20260904
 
 num_tasks: null
 seed: 42
@@ -20,9 +19,9 @@ model:
   base_url: ${FROGNANO_MODEL_BASE_URL:-}
   api_key_env: OPENAI_API_KEY
   temperature: 0.6
-  max_tokens_per_turn: 8192
+  max_tokens_per_turn: 32000
   timeout_sec: 7200
-  max_retries: 5
+  max_retries: 2
   parallel_tool_calls: true
   extra_body:
     chat_template_kwargs:
@@ -44,4 +43,4 @@ kubernetes:
   pod_start_timeout_sec: 900
   keep_pods: false
   labels:
-    frognano-experiment: swebench-verified
+    frognano-experiment: terminal-bench-2-verified

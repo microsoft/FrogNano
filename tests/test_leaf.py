@@ -1,5 +1,6 @@
 import ast
 import json
+import logging
 import math
 import shlex
 import subprocess
@@ -8,6 +9,8 @@ import threading
 import types
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from frognano.harness.leaf.agent import (
     LeafAgent,
@@ -18,6 +21,7 @@ from frognano.harness.leaf.agent import (
 from frognano.harness.leaf.environment import LeafEnvironment
 from frognano.harness.leaf.tool_runner import main, run_tool
 from frognano.harness.leaf.tools import OPENAI_TOOLS
+from frognano.runtimes.errors import CommandTimeoutError, PodExecutionError
 
 
 class FakeEnvironment:
@@ -65,7 +69,10 @@ class FakeClient:
 
     def complete(self, messages, *, tools):
         assert tools
-        return next(self.responses)
+        response = next(self.responses)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def _config(**overrides) -> LeafConfig:
@@ -77,6 +84,16 @@ def _config(**overrides) -> LeafConfig:
     }
     values.update(overrides)
     return LeafConfig(**values)
+
+
+def test_leaf_does_not_swallow_patch_capture_failure() -> None:
+    class Environment(FakeEnvironment):
+        def patch(self) -> str:
+            raise RuntimeError("patch capture failed")
+
+    agent = LeafAgent(_config(), client=FakeClient([_response(content="Done.")]))
+    with pytest.raises(RuntimeError, match="patch capture failed"):
+        agent.run(Environment(), instance_id="task", seed=0)
 
 
 def test_leaf_executes_tools_and_returns_patch() -> None:
@@ -104,19 +121,89 @@ def test_leaf_executes_tools_and_returns_patch() -> None:
     assert trajectory["steps"][-1]["observations"] == []
 
 
-def test_leaf_records_query_failures() -> None:
-    class FailingClient:
-        def complete(self, messages, *, tools):
-            raise TimeoutError("model unavailable")
-
-    trajectory = LeafAgent(_config(), client=FailingClient()).run(
+@pytest.mark.parametrize(
+    "error",
+    [
+        TimeoutError("model unavailable"),
+        RuntimeError("No available workers"),
+        ValueError("invalid context length parameter"),
+        RuntimeError("rate limit exceeded"),
+    ],
+)
+def test_leaf_records_query_failures(error) -> None:
+    trajectory = LeafAgent(_config(), client=FakeClient([error])).run(
         FakeEnvironment(),
         instance_id="task-1",
         seed=1,
     )
 
     assert trajectory["exit_reason"] == "llm_query_error"
-    assert "model unavailable" in trajectory["error"]
+    assert str(error) in trajectory["error"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "CONTEXT_LENGTH_EXCEEDED",
+        "Please reduce the length of the messages",
+        "This model's maximum context length is 131072 tokens",
+        "Input context length exceeds the model limit",
+    ],
+)
+def test_leaf_preserves_work_on_context_rejection(monkeypatch, caplog, message) -> None:
+    monkeypatch.setattr(
+        "frognano.harness.leaf.agent._count_message_tokens", lambda *args: 1
+    )
+    environment = FakeEnvironment()
+    checkpoints = []
+    client = FakeClient(
+        [
+            _response(
+                tool_calls=[
+                    _tool_call("Write", {"file_path": "file.py", "content": "fix"})
+                ]
+            ),
+            ValueError(message),
+        ]
+    )
+
+    trajectory = LeafAgent(_config(), client=client).run(
+        environment,
+        instance_id="task",
+        seed=0,
+        checkpoint_callback=checkpoints.append,
+    )
+
+    assert trajectory["exit_reason"] == "max_context_len"
+    assert trajectory["error"] is None
+    assert trajectory["output_patch"] == environment.patch()
+    assert trajectory["n_steps"] == 2
+    assert environment.calls == [("Write", {"file_path": "file.py", "content": "fix"})]
+    assert trajectory["messages"][-1]["role"] == "tool"
+    assert checkpoints[-1]["exit_reason"] == "max_context_len"
+    assert checkpoints[-1]["error"] is None
+    assert "model context limit" in caplog.text
+
+
+def test_leaf_recognizes_openai_context_rejection() -> None:
+    import httpx
+    from openai import BadRequestError
+
+    error = BadRequestError(
+        "context_length_exceeded",
+        response=httpx.Response(
+            400,
+            request=httpx.Request("POST", "http://model.test/v1/chat/completions"),
+        ),
+        body={"code": "context_length_exceeded"},
+    )
+
+    trajectory = LeafAgent(_config(), client=FakeClient([error])).run(
+        FakeEnvironment(), instance_id="task", seed=0
+    )
+
+    assert trajectory["exit_reason"] == "max_context_len"
+    assert trajectory["error"] is None
 
 
 def test_leaf_treats_empty_tool_free_response_as_agent_finish() -> None:
@@ -459,13 +546,17 @@ def test_tool_runner_uses_python_36_compatible_annotations() -> None:
 class FakeRuntime:
     def __init__(self, tmp_path) -> None:
         self.task = {"repo_path": "/testbed"}
+        self.logger = logging.getLogger(__name__)
         self.copies = []
         self.commands = []
+        self.request_files = {}
         self.recreations = 0
         self.tmp_path = tmp_path
 
     def copy_to_container(self, source, destination) -> None:
         self.copies.append((source, destination))
+        if destination.endswith(".json"):
+            self.request_files[destination] = Path(source).read_bytes()
 
     def get_task_instruction(self) -> str:
         return "Task"
@@ -476,6 +567,9 @@ class FakeRuntime:
 
     def get_patch(self) -> str:
         return "patch"
+
+    def compute_reward(self):
+        return 0.0, "valid unresolved"
 
     def recreate(self) -> None:
         self.recreations += 1
@@ -490,9 +584,57 @@ def test_leaf_environment_transports_tool_calls(tmp_path) -> None:
         "observation"
     )
     assert environment.patch() == "patch"
+    assert environment.compute_reward() == (0.0, "valid unresolved")
     assert runtime.copies[0][1] == "/tmp/frognano_leaf_tool_runner.py"
+    assert len(runtime.commands) == 1
     assert runtime.commands[0][1] == 62
     assert "/usr/bin/python3" in runtime.commands[0][0]
+    [request_path] = runtime.request_files
+    assert json.loads(runtime.request_files[request_path]) == {
+        "tool": "Bash",
+        "args": {"command": "true", "timeout": 2},
+        "workdir": "/testbed",
+    }
+    assert request_path in runtime.commands[0][0]
+    assert "base64" not in runtime.commands[0][0]
+
+
+@pytest.mark.parametrize("tool", ["Read", "Write", "Edit", "Glob", "Bash"])
+@pytest.mark.parametrize("size", [0, 32, 65536, 300000])
+def test_all_leaf_tools_transfer_request_files_at_every_size(tmp_path, tool, size):
+    runtime = FakeRuntime(tmp_path)
+    environment = LeafEnvironment(runtime)
+    value = "request-marker-'\"$HOME\r\n" + "x" * size + "\n\n"
+    arguments = {
+        "Read": {"file_path": value},
+        "Write": {"file_path": "file", "content": value},
+        "Edit": {"file_path": "file", "old_string": "old", "new_string": value},
+        "Glob": {"pattern": value},
+        "Bash": {"command": value},
+    }[tool]
+
+    assert environment.execute(tool, arguments) == "observation"
+    [path] = runtime.request_files
+    assert json.loads(runtime.request_files[path]) == {
+        "tool": tool,
+        "args": arguments,
+        "workdir": "/testbed",
+    }
+    assert value not in runtime.commands[0][0]
+    assert path in runtime.commands[0][0]
+
+
+def test_leaf_request_copy_failure_does_not_execute(tmp_path):
+    runtime = FakeRuntime(tmp_path)
+    environment = LeafEnvironment(runtime)
+
+    def copy(*args):
+        raise RuntimeError("copy failed")
+
+    runtime.copy_to_container = copy
+    with pytest.raises(RuntimeError, match="copy failed"):
+        environment.execute("Read", {"file_path": "file"})
+    assert runtime.commands == []
 
 
 def test_leaf_environment_replays_mutations_after_pod_recreation(tmp_path) -> None:
@@ -506,7 +648,7 @@ def test_leaf_environment_replays_mutations_after_pod_recreation(tmp_path) -> No
         nonlocal failed
         if not failed:
             failed = True
-            raise RuntimeError("connection refused")
+            raise PodExecutionError("connection refused")
         return original_run(command, timeout=timeout, workdir=workdir)
 
     runtime.run = fail_once
@@ -521,28 +663,169 @@ def test_leaf_environment_replays_mutations_after_pod_recreation(tmp_path) -> No
 
     assert result == "observation"
     assert runtime.recreations == 1
-    assert len(runtime.copies) == 2
+    assert (
+        sum(
+            destination == "/tmp/frognano_leaf_tool_runner.py"
+            for _, destination in runtime.copies
+        )
+        == 2
+    )
+    assert len(runtime.request_files) == 4
     assert len(runtime.commands) == 3
 
 
-def test_leaf_environment_does_not_recreate_for_non_pod_errors(tmp_path) -> None:
+@pytest.mark.parametrize(
+    "error", [RuntimeError("invalid command"), CommandTimeoutError("deadline")]
+)
+def test_leaf_environment_does_not_recreate_for_non_pod_errors(tmp_path, error) -> None:
     runtime = FakeRuntime(tmp_path)
     environment = LeafEnvironment(runtime)
-    runtime.run = lambda *args, **kwargs: (_ for _ in ()).throw(
-        RuntimeError("invalid command")
-    )
+    runtime.run = lambda *args, **kwargs: (_ for _ in ()).throw(error)
 
-    try:
+    with pytest.raises(type(error), match=str(error)):
         environment.execute("Read", {"file_path": "missing.py"})
-    except RuntimeError as exc:
-        assert str(exc) == "invalid command"
-    else:
-        raise AssertionError("non-pod error should propagate")
-
     assert runtime.recreations == 0
 
 
-def test_openai_client_builds_tool_call_request(monkeypatch) -> None:
+@pytest.mark.parametrize("code", [1, 2, 127, 137])
+def test_leaf_runner_nonzero_exit_is_an_observation(tmp_path, code):
+    runtime = FakeRuntime(tmp_path)
+    environment = LeafEnvironment(runtime)
+    runtime.run = lambda *args, **kwargs: ("runner output", code)
+
+    assert environment.execute("Bash", {"command": "false"}) == (
+        f"Tool runner exited with code {code}.\nrunner output"
+    )
+    assert runtime.recreations == 0
+
+
+@pytest.mark.parametrize("operation", ["patch", "compute_reward"])
+def test_leaf_recovers_patch_and_grading_by_replaying_mutations(tmp_path, operation):
+    runtime = FakeRuntime(tmp_path)
+    environment = LeafEnvironment(runtime)
+    environment.execute("Write", {"file_path": "first.py", "content": "one"})
+    environment.execute("Read", {"file_path": "first.py"})
+    original = runtime.get_patch if operation == "patch" else runtime.compute_reward
+    calls = []
+
+    def once():
+        calls.append(True)
+        if len(calls) == 1:
+            raise PodExecutionError("missing pod")
+        assert len(runtime.commands) == 3
+        return original()
+
+    setattr(runtime, "get_patch" if operation == "patch" else operation, once)
+    assert getattr(environment, operation)() == original()
+    assert len(calls) == 2
+    assert runtime.recreations == 1
+    assert (
+        sum(
+            destination == "/tmp/frognano_leaf_tool_runner.py"
+            for _, destination in runtime.copies
+        )
+        == 2
+    )
+
+
+def test_leaf_recovery_is_bounded_across_operations(tmp_path):
+    runtime = FakeRuntime(tmp_path)
+    environment = LeafEnvironment(runtime)
+    runtime.get_patch = lambda: (_ for _ in ()).throw(PodExecutionError("missing pod"))
+
+    with pytest.raises(PodExecutionError, match="missing pod"):
+        environment.patch()
+    assert runtime.recreations == 2
+    with pytest.raises(PodExecutionError, match="missing pod"):
+        environment.patch()
+    assert runtime.recreations == 2
+
+
+def test_leaf_recreation_failure_preserves_both_errors(tmp_path):
+    runtime = FakeRuntime(tmp_path)
+    environment = LeafEnvironment(runtime)
+    runtime.get_patch = lambda: (_ for _ in ()).throw(PodExecutionError("original"))
+    runtime.recreate = lambda: (_ for _ in ()).throw(TimeoutError("pod not deleted"))
+
+    with pytest.raises(PodExecutionError, match="original") as error:
+        environment.patch()
+    assert "pod not deleted" in str(error.value)
+    assert isinstance(error.value.__cause__, TimeoutError)
+
+
+@pytest.mark.parametrize(
+    "replay",
+    [
+        PodExecutionError("replay lost pod"),
+        ("runner was killed", 137),
+        ("PermissionError: write denied", 0),
+    ],
+)
+def test_leaf_replay_failure_aborts_before_grading(tmp_path, replay):
+    runtime = FakeRuntime(tmp_path)
+    environment = LeafEnvironment(runtime)
+    environment.execute("Write", {"file_path": "first.py", "content": "one"})
+    calls = []
+
+    def grade():
+        calls.append(True)
+        raise PodExecutionError("original")
+
+    def run(*args, **kwargs):
+        if isinstance(replay, Exception):
+            raise replay
+        return replay
+
+    runtime.compute_reward = grade
+    runtime.run = run
+    with pytest.raises(PodExecutionError, match="replay of Write failed"):
+        environment.compute_reward()
+    assert len(calls) == 1
+    assert runtime.recreations == 1
+
+
+@pytest.mark.parametrize(
+    "original_status,replayed_status",
+    [
+        ("Exit code: 0", "Exit code: 0"),
+        ("Exit code: 2", "Exit code: 2"),
+        ("Exit code: 0", "Exit code: 127"),
+        ("Timed out after 2.0s", "Timed out after 2.0s"),
+    ],
+)
+def test_bash_replay_compares_outcome_not_nondeterministic_output(
+    tmp_path, original_status, replayed_status
+):
+    runtime = FakeRuntime(tmp_path)
+    environment = LeafEnvironment(runtime)
+    runtime.run = lambda *args, **kwargs: (f"{original_status}\nSTDOUT:\nold", 0)
+    environment.execute("Bash", {"command": "action"})
+    runtime.run = lambda *args, **kwargs: (f"{replayed_status}\nSTDOUT:\nnew", 0)
+    attempts = iter([PodExecutionError("gone"), "patch"])
+
+    def patch():
+        result = next(attempts)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    runtime.get_patch = patch
+    if original_status == replayed_status:
+        assert environment.patch() == "patch"
+    else:
+        with pytest.raises(PodExecutionError, match="different outcome"):
+            environment.patch()
+
+
+@pytest.mark.parametrize("command,code", [("(", 2), ("frognano_no_such_command", 127)])
+def test_invalid_bash_command_remains_normal_leaf_observation(command, code):
+    output = run_tool("Bash", {"command": command, "timeout": 2})
+    assert output.startswith(f"Exit code: {code}\nSTDOUT:\n")
+    assert "\nSTDERR:\n" in output
+
+
+@pytest.mark.parametrize("token_limit", ["default", None, 100])
+def test_openai_client_builds_tool_call_request(monkeypatch, token_limit) -> None:
     requests = []
 
     class Completions:
@@ -557,8 +840,9 @@ def test_openai_client_builds_tool_call_request(monkeypatch) -> None:
     module = types.ModuleType("openai")
     module.OpenAI = Client
     monkeypatch.setitem(sys.modules, "openai", module)
+    overrides = {} if token_limit == "default" else {"max_tokens_per_turn": token_limit}
     config = _config(
-        max_tokens_per_turn=100,
+        **overrides,
         extra_body={"top_p": 0.9},
         parallel_tool_calls=False,
     )
@@ -567,6 +851,10 @@ def test_openai_client_builds_tool_call_request(monkeypatch) -> None:
     response = client.complete([{"role": "user", "content": "x"}], tools=[])
 
     assert response == "response"
-    assert requests[0]["max_completion_tokens"] == 100
+    expected = 8192 if token_limit == "default" else token_limit
+    if expected is None:
+        assert "max_completion_tokens" not in requests[0]
+    else:
+        assert requests[0]["max_completion_tokens"] == expected
     assert requests[0]["extra_body"] == {"top_p": 0.9}
     assert requests[0]["parallel_tool_calls"] is False

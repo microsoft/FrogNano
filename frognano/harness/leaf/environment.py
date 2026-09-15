@@ -2,29 +2,25 @@
 
 from __future__ import annotations
 
-import base64
 import json
+import re
 import shlex
+import tempfile
+import uuid
+from collections.abc import Callable
+from copy import deepcopy
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
+from frognano.runtimes.errors import PodExecutionError
 from frognano.runtimes.kubernetes import KubernetesTaskRuntime
+from frognano.runtimes.python import FIND_PYTHON
 
 _RUNNER_PATH = "/tmp/frognano_leaf_tool_runner.py"
+_REQUEST_PREFIX = "/tmp/frognano_leaf_request_"
 _MUTATING_TOOLS = frozenset({"Write", "Edit", "Bash"})
-_POD_ERROR_MARKERS = (
-    "unreachable",
-    "consecutive exec failures",
-    "proxy returned 502",
-    "proxy returned 503",
-    "proxy returned 504",
-    "urlopen error",
-    "connection refused",
-    "timed out",
-    "eof",
-    "pod command returned no exit marker",
-)
 _MAX_POD_RECOVERIES = 2
+_Result = TypeVar("_Result")
 
 
 class LeafEnvironment:
@@ -32,7 +28,7 @@ class LeafEnvironment:
         self.runtime = runtime
         runner = Path(__file__).with_name("tool_runner.py")
         self._runner = runner
-        self._action_history: list[tuple[str, dict[str, Any]]] = []
+        self._action_history: list[tuple[str, dict[str, Any], tuple[int, str]]] = []
         self._pod_recoveries = 0
         self._provision()
 
@@ -40,69 +36,100 @@ class LeafEnvironment:
         return self.runtime.get_task_instruction()
 
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
-        try:
-            output = self._execute(name, arguments)
-        except Exception as exc:
-            if not self._is_pod_error(exc) or (
-                self._pod_recoveries >= _MAX_POD_RECOVERIES
-            ):
-                raise
-            self._pod_recoveries += 1
-            try:
-                self.runtime.recreate()
-                self._provision()
-            except Exception as recovery_exc:
-                raise RuntimeError("pod recovery failed") from recovery_exc
-            for previous_name, previous_arguments in self._action_history:
-                try:
-                    self._execute(previous_name, previous_arguments)
-                except Exception:
-                    self.runtime.logger.warning(
-                        "Pod recovery: replay of %s failed (continuing)",
-                        previous_name,
-                        exc_info=True,
-                    )
-            output = self._execute(name, arguments)
+        output, exit_code = self._with_pod_recovery(
+            lambda: self._execute(name, arguments)
+        )
         if name in _MUTATING_TOOLS:
-            self._action_history.append((name, dict(arguments)))
+            self._action_history.append(
+                (name, deepcopy(arguments), _replay_outcome(name, output, exit_code))
+            )
         return output
+
+    def _with_pod_recovery(self, operation: Callable[[], _Result]) -> _Result:
+        while True:
+            try:
+                return operation()
+            except PodExecutionError as exc:
+                if self._pod_recoveries >= _MAX_POD_RECOVERIES:
+                    raise
+                self._pod_recoveries += 1
+                self.runtime.logger.warning(
+                    "Pod recovery %s/%s after execution failure: %s",
+                    self._pod_recoveries,
+                    _MAX_POD_RECOVERIES,
+                    exc,
+                )
+                try:
+                    self.runtime.recreate()
+                    self._provision()
+                except Exception as recovery_exc:
+                    raise PodExecutionError(
+                        f"pod recovery failed: {type(recovery_exc).__name__}: "
+                        f"{recovery_exc}; original failure: {exc}"
+                    ) from recovery_exc
+                for previous_name, previous_arguments, expected in self._action_history:
+                    try:
+                        output, code = self._execute(previous_name, previous_arguments)
+                        if _replay_outcome(previous_name, output, code) != expected:
+                            raise RuntimeError(
+                                "replayed tool returned a different outcome"
+                            )
+                    except Exception as replay_exc:
+                        raise PodExecutionError(
+                            f"pod recovery replay of {previous_name} failed: "
+                            f"{type(replay_exc).__name__}: {replay_exc}"
+                        ) from replay_exc
 
     def _provision(self) -> None:
         self.runtime.copy_to_container(self._runner, _RUNNER_PATH)
 
-    def _execute(self, name: str, arguments: dict[str, Any]) -> str:
-        payload = base64.b64encode(
-            json.dumps(
-                {
-                    "tool": name,
-                    "args": arguments,
-                    "workdir": self.runtime.task["repo_path"],
-                }
-            ).encode()
-        ).decode()
-        command = (
-            "python_bin=$(test -x /usr/bin/python3 && echo /usr/bin/python3 "
-            "|| command -v python3 || command -v python); "
-            f"echo {shlex.quote(payload)} | base64 -d | "
-            f'"$python_bin" {shlex.quote(_RUNNER_PATH)}'
-        )
+    def _execute(self, name: str, arguments: dict[str, Any]) -> tuple[str, int]:
         timeout = _timeout(name, arguments)
+        request_path = f"{_REQUEST_PREFIX}{uuid.uuid4().hex}.json"
+        with tempfile.TemporaryDirectory(prefix="frognano-leaf-") as directory:
+            local_path = Path(directory) / "request.json"
+            local_path.write_text(
+                json.dumps(
+                    {
+                        "tool": name,
+                        "args": arguments,
+                        "workdir": self.runtime.task["repo_path"],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            self.runtime.copy_to_container(local_path, request_path)
+        cleanup = shlex.quote(f"rm -f -- {shlex.quote(request_path)}")
+        command = (
+            f"trap {cleanup} EXIT; {FIND_PYTHON}; "
+            f'"$python_bin" {shlex.quote(_RUNNER_PATH)} {shlex.quote(request_path)}'
+        )
         output, exit_code = self.runtime.run(
             command,
             timeout=timeout,
             workdir="/",
         )
         if exit_code != 0:
-            raise RuntimeError(f"tool runner failed ({exit_code}): {output}")
-        return output
+            self.runtime.logger.warning(
+                "Leaf tool runner exited with code %s", exit_code
+            )
+            return f"Tool runner exited with code {exit_code}.\n{output}", exit_code
+        return output, exit_code
 
     def patch(self) -> str:
-        return self.runtime.get_patch()
+        return self._with_pod_recovery(self.runtime.get_patch)
 
-    @staticmethod
-    def _is_pod_error(error: Exception) -> bool:
-        message = str(error).lower()
-        return any(marker in message for marker in _POD_ERROR_MARKERS)
+    def compute_reward(self) -> tuple[float, str]:
+        return self._with_pod_recovery(self.runtime.compute_reward)
+
+
+def _replay_outcome(name: str, output: str, exit_code: int) -> tuple[int, str]:
+    if name == "Bash" and exit_code == 0:
+        status = re.match(r"(Exit code: -?\d+|Timed out after [\d.]+s)\n", output)
+        if status:
+            return exit_code, status.group(1)
+    return exit_code, output
 
 
 def _timeout(name: str, arguments: dict[str, Any]) -> int:

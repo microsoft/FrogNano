@@ -1,27 +1,36 @@
-# Bundled SWE-bench Pro configuration.
 dataset: swebench_pro
-output_dir: ${HOME}/frognano-eval-results/swebench-pro
-cache_dir: ${HOME}/.cache/frognano/harbor
+output_dir: ${FROGNANO_OUTPUT_ROOT:-~/frognano-eval-results}/swebench-pro
+cache_dir: ${FROGNANO_CACHE_DIR:-~/.cache/frognano/harbor}
 
-num_tasks: 1
+num_tasks: null
 seed: 42
-seeds_per_task: 1
-max_workers: 1
+seeds_per_task: 3
+max_workers: ${FROGNANO_MAX_WORKERS:-150}
+max_workers_per_seed: null
 max_attempts: 2
-max_steps: 100
-max_context_tokens: 65536
-max_total_time_sec: 3000
+max_steps: 150
+max_context_tokens: 131072
+max_total_time_sec: 10800
 resume: true
+resume_retry_error_contains: null
 
 model:
-  name: Qwen/Qwen3.5-4B
-  base_url: http://127.0.0.1:8000/v1
+  name: ${FROGNANO_MODEL_NAME:-}
+  base_url: ${FROGNANO_MODEL_BASE_URL:-}
   api_key_env: OPENAI_API_KEY
   temperature: 0.6
-  max_tokens_per_turn: null
+  max_tokens_per_turn: 32000
   timeout_sec: 7200
-  max_retries: 5
+  max_retries: 2
   parallel_tool_calls: true
+  extra_body:
+    chat_template_kwargs:
+      enable_thinking: true
+    top_p: 0.95
+    top_k: 20
+    min_p: 0.0
+    presence_penalty: 0.0
+    repetition_penalty: 1.0
 
 kubernetes:
   namespace: ${K8S_NAMESPACE:-default}
@@ -30,7 +39,8 @@ kubernetes:
   image_registry: ${K8S_IMAGE_REGISTRY:-}
   service_account: ${K8S_SERVICE_ACCOUNT:-}
   pull_secret: ${K8S_PULL_SECRET:-}
+  memory_limit: 32Gi
   pod_start_timeout_sec: 900
   keep_pods: false
   labels:
-    app: frognano-eval
+    frognano-experiment: swebench-pro

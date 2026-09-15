@@ -9,6 +9,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -59,7 +60,14 @@ def run_evaluation(config: EvalConfig) -> dict[str, Any]:
         if config.resume
         else {}
     )
-    processed = _processed_jobs(results_path) if config.resume else set()
+    processed = (
+        _processed_jobs(
+            results_path,
+            retry_error_contains=config.resume_retry_error_contains,
+        )
+        if config.resume
+        else set()
+    )
     tracker = (
         WandbTracker(
             config.wandb,
@@ -77,15 +85,33 @@ def run_evaluation(config: EvalConfig) -> dict[str, Any]:
         for task, seed in jobs
         if (str(task["instance_id"]), seed) not in processed
     ]
+    if config.resume_retry_error_contains is not None:
+        logger.info(
+            "Resume failure filter %r: scheduling %d task-seed jobs",
+            config.resume_retry_error_contains,
+            len(jobs),
+        )
 
     write_lock = threading.Lock()
     stop_event = threading.Event()
     previous_handlers = _install_stop_handlers(stop_event)
     started = time.time()
     try:
-        with ThreadPoolExecutor(max_workers=config.max_workers) as pool:
+        with ExitStack() as stack:
+            if config.max_workers_per_seed is None:
+                pool = stack.enter_context(
+                    ThreadPoolExecutor(max_workers=config.max_workers)
+                )
+                pools = [pool] * config.seeds_per_task
+            else:
+                pools = [
+                    stack.enter_context(
+                        ThreadPoolExecutor(max_workers=config.max_workers_per_seed)
+                    )
+                    for _ in range(config.seeds_per_task)
+                ]
             futures = {
-                pool.submit(
+                pools[seed].submit(
                     _run_job,
                     config,
                     task,
@@ -163,20 +189,21 @@ def _run_job(
     for attempt in range(1, config.max_attempts + 1):
         if stop_event is not None and stop_event.is_set():
             return _cancelled_result(task, seed, attempt)
+        last_exit_reason = "infrastructure_error"
         runtime: KubernetesTaskRuntime | None = None
         try:
-            run_id = f"{seed}-{attempt}-{uuid.uuid4().hex[:6]}"
-            runtime = KubernetesTaskRuntime(
-                task,
-                config.kubernetes,
-                run_id=run_id,
-            )
-            environment = LeafEnvironment(runtime)
             max_total_time = (
                 config.max_total_time_sec
                 if config.max_total_time_sec is not None
                 else int(task["agent_timeout_sec"])
             )
+            run_id = f"{seed}-{attempt}-{uuid.uuid4().hex[:6]}"
+            runtime = KubernetesTaskRuntime(
+                {**task, "agent_timeout_sec": max_total_time},
+                config.kubernetes,
+                run_id=run_id,
+            )
+            environment = LeafEnvironment(runtime)
             agent = LeafAgent(
                 LeafConfig(
                     model=config.model.name,
@@ -215,7 +242,7 @@ def _run_job(
                     "retryable Leaf failure: "
                     f"{trajectory['exit_reason']}: {trajectory.get('error')}"
                 )
-            reward, test_output = runtime.compute_reward()
+            reward, test_output = environment.compute_reward()
             trajectory["reward"] = reward
             trajectory["test_output"] = test_output
             trajectory["attempt"] = attempt
@@ -311,11 +338,21 @@ def _restore_stop_handlers(previous: dict[signal.Signals, Any]) -> None:
             signal.signal(signum, handler)
 
 
-def _processed_jobs(path: Path) -> set[tuple[str, int]]:
+def _processed_jobs(
+    path: Path,
+    *,
+    retry_error_contains: str | None = None,
+) -> set[tuple[str, int]]:
     return {
         key
         for key, row in _latest_results(path).items()
         if row.get("status") == "completed"
+        or (
+            retry_error_contains is not None
+            and row.get("status") == "failed"
+            and row.get("exit_reason") != "cancelled"
+            and retry_error_contains not in str(row.get("error") or "")
+        )
     }
 
 

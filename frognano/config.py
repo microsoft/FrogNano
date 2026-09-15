@@ -7,6 +7,8 @@ from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
+DEFAULT_MAX_TOKENS_PER_TURN = 8192
+
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}")
 
 
@@ -30,7 +32,7 @@ class ModelConfig:
     base_url: str
     api_key_env: str = "OPENAI_API_KEY"
     temperature: float = 0.6
-    max_tokens_per_turn: int | None = None
+    max_tokens_per_turn: int | None = DEFAULT_MAX_TOKENS_PER_TURN
     timeout_sec: int = 7200
     max_retries: int = 5
     parallel_tool_calls: bool = True
@@ -42,7 +44,7 @@ class ModelConfig:
         base_url = str(value.get("base_url") or "").strip()
         if not name or not base_url:
             raise ValueError("model.name and model.base_url are required")
-        max_tokens = value.get("max_tokens_per_turn")
+        max_tokens = value.get("max_tokens_per_turn", DEFAULT_MAX_TOKENS_PER_TURN)
         return cls(
             name=name,
             base_url=base_url.rstrip("/"),
@@ -64,6 +66,8 @@ class KubernetesConfig:
     context: str | None = None
     kubeconfig: str | None = None
     image_registry: str | None = None
+    memory_limit: str | None = None
+    pod_lifetime_sec: int | None = None
     service_account: str | None = None
     pull_secret: str | None = None
     pod_start_timeout_sec: int = 900
@@ -72,13 +76,19 @@ class KubernetesConfig:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "KubernetesConfig":
-        return cls(
+        config = cls(
             namespace=str(value.get("namespace") or "default"),
             context=value.get("context"),
             kubeconfig=value.get("kubeconfig"),
             image_registry=(
                 str(value["image_registry"]).rstrip("/")
                 if value.get("image_registry")
+                else None
+            ),
+            memory_limit=_optional_string(value.get("memory_limit")),
+            pod_lifetime_sec=(
+                int(value["pod_lifetime_sec"])
+                if value.get("pod_lifetime_sec") is not None
                 else None
             ),
             service_account=value.get("service_account"),
@@ -90,6 +100,9 @@ class KubernetesConfig:
                 for key, item in dict(value.get("labels") or {}).items()
             },
         )
+        if config.pod_lifetime_sec is not None and config.pod_lifetime_sec <= 0:
+            raise ValueError("pod_lifetime_sec must be positive")
+        return config
 
 
 @dataclass(frozen=True)
@@ -133,11 +146,13 @@ class EvalConfig:
     seed: int = 42
     seeds_per_task: int = 1
     max_workers: int = 1
+    max_workers_per_seed: int | None = None
     max_attempts: int = 2
     max_steps: int = 100
     max_context_tokens: int = 65536
     max_total_time_sec: int | None = None
     resume: bool = True
+    resume_retry_error_contains: str | None = None
     cache_dir: Path = Path("~/.cache/frognano/harbor").expanduser()
     wandb: WandbConfig | None = None
 
@@ -147,7 +162,14 @@ class EvalConfig:
         if not dataset:
             raise ValueError("dataset is required")
         num_tasks = value.get("num_tasks")
+        max_workers_per_seed = value.get("max_workers_per_seed")
         max_total_time = value.get("max_total_time_sec")
+        resume_retry_error_contains = value.get("resume_retry_error_contains")
+        if resume_retry_error_contains is not None and (
+            not isinstance(resume_retry_error_contains, str)
+            or not resume_retry_error_contains.strip()
+        ):
+            raise ValueError("resume_retry_error_contains must be a non-empty string")
         wandb = value.get("wandb")
         config = cls(
             dataset=dataset,
@@ -164,6 +186,9 @@ class EvalConfig:
             seed=int(value.get("seed", 42)),
             seeds_per_task=int(value.get("seeds_per_task", 1)),
             max_workers=int(value.get("max_workers", 1)),
+            max_workers_per_seed=(
+                None if max_workers_per_seed is None else int(max_workers_per_seed)
+            ),
             max_attempts=int(value.get("max_attempts", 2)),
             max_steps=int(value.get("max_steps", 100)),
             max_context_tokens=int(value.get("max_context_tokens", 65536)),
@@ -171,6 +196,7 @@ class EvalConfig:
                 None if max_total_time is None else int(max_total_time)
             ),
             resume=bool(value.get("resume", True)),
+            resume_retry_error_contains=resume_retry_error_contains,
             cache_dir=Path(str(value.get("cache_dir") or "~/.cache/frognano/harbor")),
             wandb=(
                 WandbConfig.from_dict(dict(wandb)) if isinstance(wandb, dict) else None
@@ -184,13 +210,23 @@ class EvalConfig:
         ):
             if getattr(config, name) <= 0:
                 raise ValueError(f"{name} must be positive")
+        if config.max_workers_per_seed is not None:
+            if config.max_workers_per_seed <= 0:
+                raise ValueError("max_workers_per_seed must be positive")
+            if config.max_workers_per_seed * config.seeds_per_task > config.max_workers:
+                raise ValueError(
+                    "max_workers must be at least "
+                    "max_workers_per_seed * seeds_per_task"
+                )
         if config.num_tasks is not None and config.num_tasks < 0:
             raise ValueError("num_tasks cannot be negative")
         if (
             config.max_total_time_sec is not None
-            and not 60 <= config.max_total_time_sec <= 7200
+            and not 60 <= config.max_total_time_sec <= 10800
         ):
-            raise ValueError("max_total_time_sec must be between 60 and 7200")
+            raise ValueError("max_total_time_sec must be between 60 and 10800")
+        if config.resume_retry_error_contains is not None and not config.resume:
+            raise ValueError("resume_retry_error_contains requires resume: true")
         return config
 
 

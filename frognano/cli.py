@@ -34,7 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--image-registry",
         type=_parse_image_registry,
         help=(
-            "Registry prefix for unqualified task images "
+            "Registry prefix for all task images, replacing any source registry "
             "(overrides kubernetes.image_registry)"
         ),
     )
