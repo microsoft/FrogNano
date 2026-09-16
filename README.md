@@ -1,239 +1,176 @@
 # FrogNano
 
-FrogNano is a small, reproducible reference implementation for evaluating
-coding agents on software engineering tasks. It uses the Leaf tool-calling
-harness to evaluate agents on Harbor task datasets, with task execution
-isolated in Kubernetes sandboxes. It includes integrations for SWE-bench
-Verified, SWE-bench Pro, Terminal-Bench 2.0, and PatchEval Verified.
-This code release accompanies the FrogNano technical report.
-
-## What is included
-
-- A Leaf coding-agent harness with `Read`, `Write`, `Edit`, `Glob`, and `Bash`
-  tools.
-- Isolated Kubernetes environments for task execution and verification.
-- Integrations for SWE-bench Verified, SWE-bench Pro, Terminal-Bench 2.0, and
-  PatchEval Verified.
-- Support for configurable OpenAI-compatible model endpoints.
-- Reproducible, commit-pinned Harbor benchmark acquisition and configuration.
-- Parallel evaluation, retries, resume support, and structured result
-  artifacts.
+FrogNano evaluates coding agents with the Leaf harness in isolated Kubernetes
+sandboxes. It supports OpenAI-compatible model endpoints and five tools:
+`Read`, `Write`, `Edit`, `Glob`, and `Bash`.
+This repository accompanies the [FrogNano technical report](https://arxiv.org/abs/2609.07925).
 
 ## Requirements
 
-- Python 3.12 or newer.
-- Git, used to retrieve benchmark task definitions.
-- A Kubernetes cluster with permission to manage task pods and network
-  policies. Minikube can be used for local evaluations.
+- Python 3.12 or newer and Git.
+- A Kubernetes cluster, an existing namespace, and permission to manage pods,
+  execute commands in them, and manage network policies.
 - Pull access to the benchmark container images.
-- An OpenAI-compatible model endpoint with structured tool-call support.
+- An OpenAI-compatible endpoint with reasoning and tool-call parsers configured
+  for the model. For Qwen3.5 with SGLang, use `--reasoning-parser qwen3` and
+  `--tool-call-parser qwen3_coder`.
+
+Task images need Bash, GNU coreutils, and Python 3.6 or newer. Public-network
+images can bootstrap missing coreutils and Python through `apt-get` or `apk`
+when package installation is permitted. Network-isolated images must include
+these dependencies.
 
 ## Install
 
-```bash
-python -m pip install git+https://github.com/microsoft/FrogNano.git
-```
-
-## Run a benchmark
-
-### Configure the model endpoint
-
-Each benchmark configuration specifies an OpenAI-compatible model endpoint.
-The endpoint's reasoning and tool-call parsers must match the model. For
-example, Qwen3.5 served with SGLang can use `--reasoning-parser qwen3` and
-`--tool-call-parser qwen3_coder`.
-
-### Select a tokenizer
-
-This step is optional. Context accounting first tries the configured model's
-Hugging Face tokenizer, then tiktoken, and finally a lightweight local
-estimate. To override the tokenizer, set a Hugging Face model or tiktoken model
-name:
+From a checkout of this repository, using uv:
 
 ```bash
-export FROGNANO_TOKENIZER=Qwen/Qwen3.5-32B
-export FROGNANO_TOKENIZER=gpt-4o
+uv venv --python 3.12
+source .venv/bin/activate
+uv pip install -e .
 ```
 
-An explicit tiktoken encoding name such as `o200k_base` is also accepted.
-
-### Run a smoke evaluation
-
-The bundled configurations evaluate one task with one worker by default:
+Alternatively, using venv and pip:
 
 ```bash
-export OPENAI_API_KEY=unused-for-local-endpoints
-export K8S_NAMESPACE=default
-
-frognano-eval run --config swebench-verified
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e .
 ```
 
-### Choose a benchmark
+## Run evaluations
 
-| Configuration | Dataset name |
+Select the served checkpoint, endpoint, and an accessible Kubernetes context
+and namespace. Replace the placeholder values below:
+
+```bash
+export FROGNANO_MODEL_NAME="your-served-checkpoint"
+export FROGNANO_MODEL_BASE_URL="https://your-model-endpoint.example/v1"
+export OPENAI_API_KEY="your-endpoint-key"
+export KUBE_CONTEXT="your-cluster-context"
+export K8S_NAMESPACE="your-existing-namespace"
+export FROGNANO_OUTPUT_ROOT="$HOME/frognano-eval-results/$(date -u +%Y%m%dT%H%M%SZ)"
+```
+
+For an unauthenticated endpoint, use any non-empty `OPENAI_API_KEY` placeholder.
+Use a fresh output root for each independent experiment; keep the same root
+when resuming one.
+
+Each command below runs a full benchmark using its YAML configuration:
+
+```bash
+frognano-eval run --config frognano/configs/eval/swebench-verified.yaml
+frognano-eval run --config frognano/configs/eval/swebench-pro.yaml
+frognano-eval run --config frognano/configs/eval/terminal-bench-2-verified.yaml
+frognano-eval run --config frognano/configs/eval/patch-eval-verified.yaml
+```
+
+| Benchmark | Tasks | Completion tokens per turn |
+|---|---:|---:|
+| SWE-bench Verified | 500 | 8,192 |
+| SWE-bench Pro | 731 | 32,000 |
+| Terminal-Bench 2.0 Verified | 89 | 32,000 |
+| PatchEval Verified | 230 | 8,192 |
+
+All presets use **three seeds and 150 shared workers**, 150 agent steps,
+a 131,072-token context limit, and a 10,800-second agent budget that overrides
+task-native time limits. Sampling uses temperature 0.6, `top_p=0.95`,
+`top_k=20`, `min_p=0`, presence penalty 0, repetition penalty 1, thinking
+enabled, and multiple tool calls per response. Task order uses shuffle seed 42.
+
+Dataset revisions are pinned. Terminal uses the ZAI Verified catalog.
+SWE-bench Verified also includes an image-digest lock; the other presets
+do not pin image digests. Matching scores requires matching checkpoint,
+tokenizer, serving configuration, task images, and evaluation protocol.
+
+### Optional environment settings
+
+| Variable | Purpose |
 |---|---|
-| `swebench-verified` | `swebench_verified` |
-| `swebench-pro` | `swebench_pro` |
-| `terminal-bench-2` | `terminal_bench_2` |
-| `patch-eval` | `patch_eval` |
+| `FROGNANO_MAX_WORKERS` | Override the shared worker count. |
+| `FROGNANO_TOKENIZER` | Matching Hugging Face tokenizer ID/path or tiktoken encoding for context accounting. |
+| `FROGNANO_CACHE_DIR` | Benchmark definition cache directory. |
+| `KUBE_CONFIG_PATH` | Kubeconfig file; otherwise use the standard Kubernetes configuration. |
+| `K8S_IMAGE_REGISTRY` | Image mirror prefix, replacing the registry while retaining repository paths, tags, and digests. |
+| `K8S_PULL_SECRET` | Existing image-pull secret in the task namespace. |
+| `K8S_SERVICE_ACCOUNT` | Service account for task pods. |
 
-To inspect a registered dataset source, run:
+A mirror must contain every referenced image and digest; FrogNano does not
+copy images or fall back to the original registry. Registry credentials belong
+in the Kubernetes pull secret, not in configuration files.
 
-```bash
-frognano-eval dataset swebench_verified
-```
+### Custom configurations
 
-### Customize an evaluation
-
-Copy a YAML file from `frognano/configs/eval/` and pass its path to `--config`.
-Update the model endpoint, task selection, concurrency, or Kubernetes settings
-in the copied configuration.
-
-To run the full dataset with 50 concurrent workers, set:
-
-```yaml
-num_tasks: null
-max_workers: 50
-```
-
-Then run the copied configuration:
+Copy a preset, edit its settings, and run the copied file:
 
 ```bash
-frognano-eval run --config swebench-verified-full.yaml
+cp frognano/configs/eval/swebench-verified.yaml eval.yaml
+# Edit eval.yaml before running.
+frognano-eval run --config eval.yaml
 ```
 
-To evaluate specific tasks instead, set:
+For a one-task smoke run, set `num_tasks: 1`, `seeds_per_task: 1`, and
+`max_workers: 1` in the copy. Use `task_ids` to select specific tasks.
+Set `max_workers_per_seed` for separate per-seed pools; their combined capacity
+must not exceed `max_workers`. An `image_digest_lock` JSON file can pin task
+images using an `images` list of `task_id`/`digest` pairs.
 
-```yaml
-task_ids:
-  - astropy__astropy-12907
-```
+## Results and recovery
 
-Benchmark images resolve through Docker Hub by default. The bundled
-configurations read the registry from `K8S_IMAGE_REGISTRY`:
-
-```bash
-export K8S_IMAGE_REGISTRY=registry.example.com
-```
-
-Alternatively, set the registry in a copied YAML configuration:
-
-```yaml
-kubernetes:
-  image_registry: registry.example.com
-```
-
-Use `image_registry: ${K8S_IMAGE_REGISTRY:-}` in a custom configuration to
-read it from the environment. A command-line parameter overrides either form:
-
-```bash
-frognano-eval run --config eval.yaml --image-registry registry.example.com
-```
-
-Registry prefixes may include a port or mirror namespace, such as
-`registry.example.com:5000/benchmarks`. They apply to task images without an
-explicit registry; fully qualified image references are unchanged.
-
-To pin each selected task image to an immutable digest, provide a Harbor image
-lock containing an `images` list with `task_id` and `digest` fields:
-
-```yaml
-image_digest_lock: /path/to/sweb-v-20260904.json
-```
-
-FrogNano replaces each task image tag with the matching `@sha256:...` digest
-and fails before launching work if a selected task is missing from the lock.
-The configured image registry is preserved. Use
-`image_digest_lock: sweb-v-20260904` to select the bundled Verified lock.
-The lock contains only an `images` list of `task_id`/`digest` pairs. The pinned
-task catalog supplies image repositories, and the YAML/environment/CLI setting
-selects the registry. A mirror must provide the same image repositories and
-immutable digests.
-
-### Track an evaluation with W&B
-
-Install the optional W&B integration:
-
-```bash
-python -m pip install \
-  "frognano[wandb] @ git+https://github.com/microsoft/FrogNano.git"
-```
-
-Set `WANDB_API_KEY` and add a `wandb` block to the evaluation configuration:
-
-```yaml
-wandb:
-  base_url: https://api.wandb.ai
-  entity: example-team
-  project: coding-agent-evaluations
-  name: swebench-verified
-  tags: [leaf, swebench]
-```
-
-FrogNano logs resolve, unresolve, and error percentages in an `overall` section
-and one section per seed. Overall also includes completed percentage, result
-totals, and stop-reason totals. Errors are rollouts that did not produce a valid
-benchmark result. FrogNano uploads `config.json`, `results.jsonl`, and
-`summary.json` at completion. The W&B run ID is stored in the output directory
-so resumed evaluations continue writing to the same run.
-
-For runs with exactly three seeds per task, `overall/pass_at_3_percent` reports
-the percentage of selected tasks solved by **at least one of the three seeds**.
-Each task counts once, regardless of how many seeds solve it. A solved seed
-must have a completed result with reward at least 1; errors and valid zero
-rewards do not count as successes. The denominator includes all selected tasks,
-so the live value is provisional while seeds are still running. W&B also logs
-`overall/pass_at_3_resolved_tasks` and `overall/pass_at_3_total_tasks`. These
-metrics are restored from the latest results on resume and do not replace
-per-rollout or per-seed metrics.
-
-## Outputs
-
-Each run writes:
+Each benchmark writes its own subdirectory under `FROGNANO_OUTPUT_ROOT`:
 
 ```text
-<output_dir>/
+<benchmark>/
   config.json
   results.jsonl
   summary.json
-  trajectories/
-    <instance_id>/
-      trajectory_seed-0.json
-      generated_seed-0.patch
+  trajectories/<instance_id>/
+    trajectory_seed-0.json
+    generated_seed-0.patch
 ```
 
-With `resume: true`, completed `(instance_id, seed)` pairs in `results.jsonl`
-are skipped.
+`results.jsonl` records status, reward, and exit reason per task and seed.
+`summary.json` reports resolved outcomes over all scheduled task-seed pairs,
+not pass@3. FrogNano grades the final workspace even when an agent reaches
+its context, step, or time limit.
 
-## Adding datasets
+With `resume: true`, completed outcomes, including valid unresolved outcomes,
+are preserved; failed and unstarted pairs are eligible to run. Each pair allows
+two full attempts for execution errors. Set `resume_retry_error_contains` in
+a custom config to restrict retries of recorded failures to a matching error.
 
-Add a module under `frognano/datasets/` that defines an immutable
-`DatasetSource`. A Harbor directory-backed dataset can reuse
-`load_harbor_dataset`:
+Commands and tool requests use file transfers with checksummed output.
+Lost execution acknowledgements trigger output retrieval, not command resubmission.
+Pod recovery replays completed mutating actions, which can repeat external
+side effects. Controller restarts begin unfinished rollouts from scratch,
+not from saved partial conversations. The CLI runs in the foreground; use
+an external process supervisor for unattended evaluations.
 
-```python
-SOURCE = DatasetSource(
-    name="example",
-    display_name="Example",
-    source_url="https://github.com/example/harbor-datasets.git",
-    revision="<full-commit-sha>",
-    subpath="datasets/example",
-    pod_prefix="example",
-)
+## Optional W&B tracking
+
+Install the extra and provide credentials through the environment:
+
+```bash
+uv pip install -e '.[wandb]'
+export WANDB_API_KEY="your-wandb-key"
 ```
 
-Import the source in `frognano/datasets/__init__.py` and add its loader to
-`_DATASETS`:
+For pip, use `python -m pip install -e '.[wandb]'` instead.
 
-```python
-from .example import SOURCE as EXAMPLE
+Add this block to a copied configuration such as `eval.yaml`:
 
-_DATASETS = {
-    # Existing datasets...
-    EXAMPLE.name: (EXAMPLE, load_harbor_dataset),
-}
+```yaml
+wandb:
+  entity: your-team
+  project: coding-agent-evaluations
 ```
 
-This keeps dataset identity and policy separate from the harness, allowing new
-integrations to provide their own loaders or runtime requirements without
-changing the orchestration layer.
+Then run `frognano-eval run --config eval.yaml`. W&B tracks overall and per-seed
+metrics and uploads configuration, results, and summary artifacts. The saved
+run ID lets resumed evaluations continue the same W&B run.
+
+With exactly three seeds, `overall/pass_at_3_percent` counts selected tasks
+with at least one completed seed whose reward is at least 1. Each task counts
+once; all selected tasks remain in the denominator. W&B also logs
+`overall/pass_at_3_resolved_tasks` and `overall/pass_at_3_total_tasks`.
+These values are restored on resume and remain provisional while work is pending.

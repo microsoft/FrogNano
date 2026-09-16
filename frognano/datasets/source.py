@@ -15,3 +15,6 @@ class DatasetSource:
     verifier_network_mode: str = "no-network"
     default_image_registry: str | None = None
     verifier_success_marker: str | None = None
+    git_filter: str | None = "blob:none"
+    strip_instruction_canary: bool = False
+    require_git_patch: bool = True

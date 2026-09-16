@@ -4,20 +4,22 @@ from pathlib import Path
 from typing import Callable
 
 from frognano.datasets.harbor import load_harbor_dataset
-from frognano.datasets.patch_eval import SOURCE as PATCH_EVAL
-from frognano.datasets.patch_eval import load_patch_eval
+from frognano.datasets.patch_eval_verified import SOURCE as PATCH_EVAL_VERIFIED
+from frognano.datasets.patch_eval_verified import load_patch_eval_verified
 from frognano.datasets.source import DatasetSource
 from frognano.datasets.swebench_pro import SOURCE as SWEBENCH_PRO
 from frognano.datasets.swebench_verified import SOURCE as SWEBENCH_VERIFIED
-from frognano.datasets.terminal_bench_2 import SOURCE as TERMINAL_BENCH_2
+from frognano.datasets.terminal_bench_2_verified import (
+    SOURCE as TERMINAL_BENCH_2_VERIFIED,
+)
 
 DatasetLoader = Callable[..., list[dict]]
 
 _DATASETS: dict[str, tuple[DatasetSource, DatasetLoader]] = {
-    PATCH_EVAL.name: (PATCH_EVAL, load_patch_eval),
+    PATCH_EVAL_VERIFIED.name: (PATCH_EVAL_VERIFIED, load_patch_eval_verified),
     SWEBENCH_PRO.name: (SWEBENCH_PRO, load_harbor_dataset),
     SWEBENCH_VERIFIED.name: (SWEBENCH_VERIFIED, load_harbor_dataset),
-    TERMINAL_BENCH_2.name: (TERMINAL_BENCH_2, load_harbor_dataset),
+    TERMINAL_BENCH_2_VERIFIED.name: (TERMINAL_BENCH_2_VERIFIED, load_harbor_dataset),
 }
 
 

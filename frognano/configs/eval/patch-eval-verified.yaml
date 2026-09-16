@@ -1,7 +1,6 @@
-dataset: swebench_verified
-output_dir: ${FROGNANO_OUTPUT_ROOT:-~/frognano-eval-results}/swebench-verified
+dataset: patch_eval_verified
+output_dir: ${FROGNANO_OUTPUT_ROOT:-~/frognano-eval-results}/patch-eval-verified
 cache_dir: ${FROGNANO_CACHE_DIR:-~/.cache/frognano/harbor}
-image_digest_lock: sweb-v-20260904
 
 num_tasks: null
 seed: 42
@@ -40,8 +39,7 @@ kubernetes:
   image_registry: ${K8S_IMAGE_REGISTRY:-}
   service_account: ${K8S_SERVICE_ACCOUNT:-}
   pull_secret: ${K8S_PULL_SECRET:-}
-  memory_limit: 32Gi
   pod_start_timeout_sec: 900
   keep_pods: false
   labels:
-    frognano-experiment: swebench-verified
+    frognano-experiment: patch-eval-verified

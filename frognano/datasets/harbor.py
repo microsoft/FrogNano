@@ -11,11 +11,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from frognano.datasets.images import resolve_image_registry
 from frognano.datasets.source import DatasetSource
 
 _REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 _IMAGE_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _ENV_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-(.*?))?\}")
+_CANARY_LINE_RE = re.compile(r"^(<!--.*canary.*-->|#.*canary.*)$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -116,7 +118,7 @@ def materialize_source(source: DatasetSource, cache_dir: Path) -> Path:
             "fetch",
             "--quiet",
             "--depth=1",
-            "--filter=blob:none",
+            *([f"--filter={source.git_filter}"] if source.git_filter else []),
             "origin",
             revision,
             env=env,
@@ -209,18 +211,23 @@ def parse_harbor_task(
         task_dir / "environment" / "Dockerfile",
         final_image=bool(configured_image),
     )
-    image = str(configured_image or runtime.image)
-    effective_registry = image_registry or source.default_image_registry
-    if effective_registry and _is_unqualified_image(image):
-        image = f"{effective_registry}/{image}"
+    image = resolve_image_registry(
+        str(configured_image or runtime.image),
+        image_registry,
+        default_registry=source.default_image_registry,
+    )
     workdir = str(environment.get("workdir") or runtime.workdir or "/app")
     agent_timeout = int(agent.get("timeout_sec") or 3600)
     verifier_timeout = int(verifier.get("timeout_sec") or 600)
+    instruction = instruction_path.read_text(encoding="utf-8")
+    if source.strip_instruction_canary:
+        instruction = _strip_canary(instruction)
     return {
         "dataset_type": "harbor",
         "dataset": source.name,
         "instance_id": task_dir.name,
-        "instruction": instruction_path.read_text(encoding="utf-8"),
+        "instruction": instruction,
+        "require_git_patch": source.require_git_patch,
         "docker_image": image,
         "repo_path": workdir,
         "environment_env": {
@@ -262,6 +269,16 @@ def parse_harbor_task(
         },
         "pod_prefix": source.pod_prefix,
     }
+
+
+def _strip_canary(text: str) -> str:
+    lines = text.split("\n")
+    index = 0
+    while index < len(lines) and _CANARY_LINE_RE.match(lines[index].strip()):
+        index += 1
+    while index < len(lines) and not lines[index].strip():
+        index += 1
+    return "\n".join(lines[index:])
 
 
 def parse_dockerfile(
@@ -339,11 +356,6 @@ def _dockerfile_instructions(text: str) -> list[tuple[str, str]]:
         for line in logical
         if len(line.split(None, 1)) == 2
     ]
-
-
-def _is_unqualified_image(image: str) -> bool:
-    first = image.split("/", 1)[0]
-    return "." not in first and ":" not in first and first != "localhost"
 
 
 def _expand_env(value: str) -> str:

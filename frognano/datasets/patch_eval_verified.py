@@ -6,21 +6,22 @@ from typing import Any
 from urllib.parse import urlparse
 
 from frognano.datasets.harbor import materialize_source
+from frognano.datasets.images import resolve_image_registry
 from frognano.datasets.source import DatasetSource
 
 SOURCE = DatasetSource(
-    name="patch_eval",
+    name="patch_eval_verified",
     display_name="PatchEval Verified",
     source_url="https://github.com/bytedance/PatchEval.git",
     revision="b43285cdde80cc04608d5f1178a330b740c91c2d",
     subpath="patcheval/datasets",
-    pod_prefix="patch-eval",
+    pod_prefix="patch-eval-verified",
     agent_network_mode="no-network",
     verifier_network_mode="no-network",
 )
 
 
-def load_patch_eval(
+def load_patch_eval_verified(
     source: DatasetSource,
     *,
     cache_dir: Path,
@@ -54,12 +55,11 @@ def _parse_sample(
     cve = str(sample["cve_id"])
     image = str(sample.get("image_url") or "").strip()
     if not image:
-        raise ValueError(f"PatchEval sample {cve} has no image_url")
-    if image_registry and _is_unqualified_image(image):
-        image = f"{image_registry.rstrip('/')}/{image}"
+        raise ValueError(f"PatchEval Verified sample {cve} has no image_url")
+    image = resolve_image_registry(image, image_registry)
     repo_name = Path(urlparse(str(sample.get("repo") or "")).path).stem
     return {
-        "dataset_type": "patch_eval",
+        "dataset_type": "patch_eval_verified",
         "dataset": source.name,
         "instance_id": cve,
         "instruction": _instruction(sample),
@@ -68,7 +68,7 @@ def _parse_sample(
         "repo_name": repo_name,
         "detect_repo_path": True,
         "hide_workspace_payload": True,
-        "verifier_protocol": "patch_eval",
+        "verifier_protocol": "patch_eval_verified",
         "environment_env": {},
         "setup_commands": [],
         "tests_dir": None,
@@ -102,8 +102,3 @@ def _instruction(sample: dict[str, Any]) -> str:
         "release note, issue, pull request, or upstream patch. Do not run "
         "network commands to find the fix."
     )
-
-
-def _is_unqualified_image(image: str) -> bool:
-    first = image.split("/", 1)[0]
-    return "." not in first and ":" not in first and first != "localhost"

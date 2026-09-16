@@ -14,6 +14,7 @@ from typing import Any, Callable, Protocol
 
 import tiktoken
 
+from frognano.config import DEFAULT_MAX_TOKENS_PER_TURN
 from frognano.harness.leaf.environment import LeafEnvironment
 from frognano.harness.leaf.tools import OPENAI_TOOLS, SYSTEM_PROMPT
 
@@ -36,7 +37,7 @@ class LeafConfig:
     base_url: str
     api_key: str
     temperature: float = 0.6
-    max_tokens_per_turn: int | None = None
+    max_tokens_per_turn: int | None = DEFAULT_MAX_TOKENS_PER_TURN
     timeout_sec: int = 7200
     max_retries: int = 5
     parallel_tool_calls: bool = True
@@ -159,8 +160,12 @@ class LeafAgent:
             try:
                 response = self.client.complete(messages, tools=OPENAI_TOOLS)
             except Exception as exc:
-                exit_reason = "llm_query_error"
-                error = f"{type(exc).__name__}: {exc}"
+                if _is_context_overflow(exc):
+                    exit_reason = "max_context_len"
+                    logger.warning("Leaf reached the model context limit: %s", exc)
+                else:
+                    exit_reason = "llm_query_error"
+                    error = f"{type(exc).__name__}: {exc}"
                 break
             choice = response.choices[0]
             message = choice.message
@@ -235,11 +240,7 @@ class LeafAgent:
             exit_reason = "max_turns"
 
         emit_checkpoint(exit_reason)
-        try:
-            output_patch = environment.patch()
-        except Exception:
-            logger.warning("Leaf patch capture failed", exc_info=True)
-            output_patch = ""
+        output_patch = "" if exit_reason == "cancelled" else environment.patch()
         result = trajectory(
             reason=exit_reason,
             partial=False,
@@ -293,6 +294,18 @@ def _is_length_finish(choice: Any) -> bool:
         str(getattr(choice, "finish_reason", None) or "").lower()
         in _LENGTH_FINISH_REASONS
     )
+
+
+def _is_context_overflow(error: Exception) -> bool:
+    message = str(error).lower()
+    return any(
+        marker in message
+        for marker in (
+            "context_length_exceeded",
+            "reduce the length",
+            "maximum context length",
+        )
+    ) or ("context length" in message and "exceed" in message)
 
 
 def _parse_arguments(raw: str | None) -> dict[str, Any]:
