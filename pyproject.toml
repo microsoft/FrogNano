@@ -29,7 +29,7 @@ frognano-eval = "frognano.cli:main"
 
 [project.optional-dependencies]
 wandb = [
-    "wandb==0.29.0",
+    "wandb==0.30.0",
 ]
 dev = [
     "black==26.5.1",
