@@ -1,9 +1,19 @@
 # FrogNano
 
-FrogNano evaluates coding agents with the Leaf harness in isolated Kubernetes
-sandboxes. It supports OpenAI-compatible model endpoints and five tools:
-`Read`, `Write`, `Edit`, `Glob`, and `Bash`.
-This repository accompanies the [FrogNano technical report](https://arxiv.org/abs/2609.07925).
+FrogNano is a compact 4B coding agent built on Qwen3.5-4B for repository-level
+software engineering. It uses the lightweight Leaf harness to navigate
+codebases, debug issues, edit files, and run tests.
+Its agent-specific post-training uses only reinforcement learning on around
+1,500 synthetic software-engineering task environments. TaskPilot generates and
+calibrates tasks to the evolving model's capabilities, targeting the frontier
+of what it can learn. This training uses no solution trajectories distilled
+from larger models.
+
+This repository provides the Leaf harness and evaluation tooling for running
+coding agents in isolated Kubernetes sandboxes. It supports OpenAI-compatible
+model endpoints and five tools: `Read`, `Write`, `Edit`, `Glob`, and `Bash`.
+
+**[Technical report](https://arxiv.org/abs/2609.07925)** | **[Model weights on Hugging Face](https://huggingface.co/microsoft/FrogNano-4B-2609)**
 
 ## Requirements
 
