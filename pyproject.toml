@@ -14,7 +14,7 @@ classifiers = [
 ]
 dependencies = [
     "kubernetes==36.0.3",
-    "openai==3.13.0",
+    "openai==3.19.2",
     "PyYAML==6.0.3",
     "tiktoken==0.14.0",
     "transformers==5.17.0",
