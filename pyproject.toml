@@ -17,7 +17,7 @@ dependencies = [
     "openai==3.19.2",
     "PyYAML==6.0.3",
     "tiktoken==0.14.0",
-    "transformers==5.17.0",
+    "transformers==5.18.0",
 ]
 
 [project.urls]
