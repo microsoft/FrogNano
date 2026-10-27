@@ -186,14 +186,14 @@ def test_leaf_preserves_work_on_context_rejection(monkeypatch, caplog, message) 
 
 
 def test_leaf_recognizes_openai_context_rejection() -> None:
-    import httpx
+    import httpx2
     from openai import BadRequestError
 
     error = BadRequestError(
         "context_length_exceeded",
-        response=httpx.Response(
+        response=httpx2.Response(
             400,
-            request=httpx.Request("POST", "http://model.test/v1/chat/completions"),
+            request=httpx2.Request("POST", "http://model.test/v1/chat/completions"),
         ),
         body={"code": "context_length_exceeded"},
     )
