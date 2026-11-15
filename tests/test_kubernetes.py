@@ -84,15 +84,19 @@ def test_get_patch_resets_index_after_capture() -> None:
     runtime = object.__new__(KubernetesTaskRuntime)
     runtime.task = {"repo_path": "/testbed"}
     commands = []
+    timeouts = []
 
     def run(command, *, timeout=120, workdir=None):
         commands.append(command)
+        timeouts.append(timeout)
         return "diff --git a/file b/file", 0
 
     runtime.run = run
 
     assert runtime.get_patch().startswith("diff --git")
     assert "git -C /testbed reset --mixed HEAD" in commands[0]
+    # A finished agent run must not be discarded by the 120 s command default.
+    assert timeouts[0] >= 600
 
 
 @pytest.mark.parametrize(

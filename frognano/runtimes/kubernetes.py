@@ -33,6 +33,10 @@ _COMMAND_CONTROL_TIMEOUT = 30
 _COMMAND_CONTROL_ATTEMPTS = 3
 _COMMAND_START_GRACE = 60
 _OUTPUT_CHUNK_BYTES = 49152
+# `git add -A` over the whole worktree runs after the agent has finished; on a
+# large repository or a loaded node it can exceed the 120 s command default,
+# and a timeout here discards the completed agent run and replays the task.
+_GIT_STAGING_TIMEOUT = 600
 
 _CHECK_COREUTILS = r"""
 set -eo pipefail
@@ -751,6 +755,7 @@ class KubernetesTaskRuntime:
             f"git -C {repo} diff --cached --binary 2>/dev/null; "
             f"rc=$?; git -C {repo} reset --mixed HEAD >/dev/null 2>&1; "
             f"exit $rc",
+            timeout=_GIT_STAGING_TIMEOUT,
             workdir="/",
         )
         if exit_code != 0:
@@ -771,7 +776,7 @@ class KubernetesTaskRuntime:
         # Harbor verifiers clean untracked files; preserve agent-created files
         # after the non-mutating patch capture has reset the index.
         if self._has_git_checkout():
-            output, exit_code = self.run("git add -A", timeout=120)
+            output, exit_code = self.run("git add -A", timeout=_GIT_STAGING_TIMEOUT)
             if exit_code != 0:
                 raise RuntimeError(
                     f"could not stage agent changes for grading: {output}"
